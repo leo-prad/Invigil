@@ -1,0 +1,11 @@
+# Node dependencies
+node_modules/
+
+# Rust build target
+/src-tauri/target/
+
+# System / IDE files
+.DS_Store
+Thumbs.db
+.claude/
+*.log
