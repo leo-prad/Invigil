@@ -106,23 +106,42 @@ pub fn is_ollama_available() -> bool {
 }
 
 /// Verify if a goal text and description are a real study/work task (min 25 chars) using Gemma LLM.
-pub fn validate_goal(goal: &str, description: &str) -> bool {
+/// Returns Ok("") if valid, or Ok("reason") if rejected.
+pub fn validate_goal(goal: &str, description: &str) -> String {
     let clean_goal = goal.trim();
     let clean_desc = description.trim();
 
     if clean_goal.len() < 2 || clean_desc.len() < 25 {
-        return false;
+        return "Description must be at least 25 characters.".into();
     }
-    
-    // Quick heuristic check for keyboard spam (e.g. "asdfasdfasdfasdfasdfasdfasdf")
+
+    // Quick heuristic check for keyboard spam
     let chars: Vec<char> = clean_desc.chars().collect();
     let all_same = chars.iter().all(|&c| c == chars[0]);
     if all_same {
-        return false;
+        return "That looks like keyboard spam — describe your actual task.".into();
+    }
+
+    // Detect repeating short patterns (e.g. "sdcsdcsdcsdc", "ababababab")
+    if is_repeating_pattern(&clean_desc.to_lowercase()) {
+        return "That looks like a repeating pattern — describe your actual task.".into();
+    }
+
+    // Check for low unique-character ratio (e.g. "aaabbbcccaaabbb")
+    let unique: std::collections::HashSet<char> = clean_desc.chars().filter(|c| c.is_alphabetic()).collect();
+    let alpha_count = clean_desc.chars().filter(|c| c.is_alphabetic()).count();
+    if alpha_count > 10 && unique.len() <= 4 {
+        return "Description uses too few distinct letters — write a real sentence.".into();
+    }
+
+    // Check that it contains at least a few real words (spaces)
+    let word_count = clean_desc.split_whitespace().count();
+    if word_count < 3 {
+        return "Write at least a short sentence describing your task.".into();
     }
 
     if !is_ollama_available() {
-        return clean_desc.len() >= 25;
+        return String::new();
     }
 
     let prompt = format!(
@@ -144,12 +163,12 @@ pub fn validate_goal(goal: &str, description: &str) -> bool {
 
     let body_bytes = match serde_json::to_vec(&body) {
         Ok(b) => b,
-        Err(_) => return true,
+        Err(_) => return String::new(),
     };
 
-    let mut stream = match TcpStream::connect_timeout(&match OLLAMA_HOST.parse() { Ok(a) => a, Err(_) => return true }, TIMEOUT) {
+    let mut stream = match TcpStream::connect_timeout(&match OLLAMA_HOST.parse() { Ok(a) => a, Err(_) => return String::new() }, TIMEOUT) {
         Ok(s) => s,
-        Err(_) => return true,
+        Err(_) => return String::new(),
     };
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(TIMEOUT));
@@ -166,17 +185,17 @@ pub fn validate_goal(goal: &str, description: &str) -> bool {
 
     use std::io::Write;
     if stream.write_all(request.as_bytes()).is_err() || stream.write_all(&body_bytes).is_err() || stream.flush().is_err() {
-        return true;
+        return String::new();
     }
 
     let mut buf = Vec::with_capacity(2048);
     if stream.read_to_end(&mut buf).is_err() {
-        return true;
+        return String::new();
     }
     let raw = String::from_utf8_lossy(&buf);
     let json_start = match raw.find("\r\n\r\n").map(|i| i + 4).or_else(|| raw.find("\n\n").map(|i| i + 2)) {
         Some(i) => i,
-        None => return true,
+        None => return String::new(),
     };
     let json_str = &raw[json_start..];
     let json_clean = if json_str.starts_with(|c: char| c.is_ascii_hexdigit()) {
@@ -187,11 +206,30 @@ pub fn validate_goal(goal: &str, description: &str) -> bool {
 
     let resp: OllamaResponse = match serde_json::from_str(json_clean.trim()) {
         Ok(r) => r,
-        Err(_) => return true,
+        Err(_) => return String::new(),
     };
 
     let ans = resp.response.trim().to_lowercase();
-    !ans.contains("invalid")
+    if ans.contains("invalid") {
+        "AI rejected this — it doesn't look like a real task description.".into()
+    } else {
+        String::new()
+    }
+}
+
+/// Detect repeating short substrings (e.g. "sdc" repeated in "sdcsdcsdcsdc").
+fn is_repeating_pattern(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    if len < 6 { return false; }
+    for pat_len in 2..=6.min(len / 2) {
+        let pat = &bytes[..pat_len];
+        let repeats = bytes.chunks(pat_len).filter(|chunk| *chunk == pat).count();
+        if repeats >= 3 && repeats * pat_len >= len - pat_len {
+            return true;
+        }
+    }
+    false
 }
 
 fn build_prompt(goal: &str, description: &str, app_name: &str, window_title: &str) -> String {

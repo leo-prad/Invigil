@@ -25,7 +25,7 @@
         "label": "drift_overlay",
         "title": "Invigil Alert",
         "url": "index.html#overlay-drift",
-        "fullscreen": true,
+        "fullscreen": false,
         "transparent": true,
         "alwaysOnTop": true,
         "decorations": false,

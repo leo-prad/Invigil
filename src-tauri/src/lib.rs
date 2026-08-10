@@ -9,7 +9,7 @@ use db::Database;
 use parking_lot::Mutex;
 use session::SessionManager;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
 
 // ─── App state ───────────────────────────────────────────────────────
 
@@ -54,6 +54,13 @@ fn start_session(
 
                 if result.drift_triggered {
                     if let Some(drift_win) = app_clone.get_webview_window("drift_overlay") {
+                        // Size overlay to cover the entire monitor
+                        if let Ok(Some(monitor)) = drift_win.current_monitor() {
+                            let pos = monitor.position();
+                            let size = monitor.size();
+                            let _ = drift_win.set_position(PhysicalPosition::new(pos.x, pos.y));
+                            let _ = drift_win.set_size(PhysicalSize::new(size.width, size.height));
+                        }
                         let _ = drift_win.show();
                         let _ = drift_win.set_always_on_top(true);
                         let _ = drift_win.set_focus();
@@ -280,7 +287,7 @@ fn get_active_window() -> Result<monitor::WindowInfo, String> {
 }
 
 #[tauri::command]
-fn validate_goal(goal: String, description: String) -> Result<bool, String> {
+fn validate_goal(goal: String, description: String) -> Result<String, String> {
     Ok(llm::validate_goal(&goal, &description))
 }
 
