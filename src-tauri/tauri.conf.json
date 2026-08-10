@@ -1,0 +1,63 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Invigil",
+  "version": "0.1.0",
+  "identifier": "com.invigil.app",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Invigil",
+        "width": 1100,
+        "height": 750,
+        "minWidth": 780,
+        "minHeight": 550,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true
+      },
+      {
+        "label": "drift_overlay",
+        "title": "Invigil Alert",
+        "url": "index.html#overlay-drift",
+        "fullscreen": true,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "decorations": false,
+        "visible": false,
+        "skipTaskbar": true
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "trayIcon": {
+      "iconPath": "icons/32x32.png",
+      "iconAsTemplate": true,
+      "tooltip": "Invigil — Focus Daemon"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "Focus-tracking desktop app with Professor Xeno",
+    "longDescription": "Invigil monitors your screen activity during study sessions, classifies on-task vs off-task behavior, and helps you stay focused with cyberpunk-style drift alerts, gamified points, and Professor Xeno's guidance.",
+    "windows": {
+      "wix": {
+        "language": "en-US"
+      }
+    }
+  }
+}

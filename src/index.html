@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang='en' data-theme='light'>
+<head>
+  <meta charset='UTF-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+  <title>Invigil — Focus Daemon</title>
+  <link rel='stylesheet' href='styles.css'>
+</head>
+<body>
+
+<div class="page-wrap">
+  <div class="app">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M4 20c0-8 6-14 16-14-1 9-6 15-16 15z" fill="#5A7A47"/>
+            <path d="M4 20c4-3 8-6 11-9" stroke="#F0E7D0" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-name">Invigil</div>
+          <div class="brand-sub">Focus daemon</div>
+        </div>
+      </div>
+      <nav>
+        <div class="nav-item active" data-page="dashboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 20V9m6 11V4m6 16v-7m6 7v-11"/></svg>
+          Dashboard
+        </div>
+        <div class="nav-item" data-page="session">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          Session
+        </div>
+        <div class="nav-item" data-page="settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.6V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.6-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.6-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3 1.7 1.7 0 001-1.6V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.6 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9 1.7 1.7 0 001.6 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.6 1z"/></svg>
+          Settings
+        </div>
+      </nav>
+
+      <!-- Mascot bottom-left with bubble underneath -->
+      <div class="mascot-slot">
+        <div class="mascot-fig">
+          <svg viewBox="0 0 100 110" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <radialGradient id="head" cx="50%" cy="38%" r="62%">
+                <stop offset="0%" stop-color="#E4EDD9"/>
+                <stop offset="60%" stop-color="#BFD2A6"/>
+                <stop offset="100%" stop-color="#7E9865"/>
+              </radialGradient>
+              <radialGradient id="cheek" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#C5714A" stop-opacity="0.4"/>
+                <stop offset="100%" stop-color="#C5714A" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+            <path d="M22 78 L20 108 L80 108 L78 78 Z" fill="#1F241E"/>
+            <path d="M40 78 L50 96 L60 78 Z" fill="#F0E7D0"/>
+            <path d="M46 80 L42 76 L42 84 L46 80 L54 80 L58 84 L58 76 L54 80 Z" fill="#F0E7D0"/>
+            <circle cx="50" cy="80" r="1.2" fill="#1F241E"/>
+            <rect x="45" y="72" width="10" height="8" fill="url(#head)"/>
+            <ellipse cx="50" cy="42" rx="30" ry="34" fill="url(#head)"/>
+            <ellipse cx="50" cy="52" rx="28" ry="10" fill="#4E6540" opacity="0.18"/>
+            <path d="M50 10 Q50 4 54 4" stroke="#4E6540" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <circle cx="55" cy="3.5" r="2.2" fill="#B5C89B"/>
+            <circle cx="55" cy="3.5" r="4" fill="#B5C89B" opacity="0.3"/>
+            <ellipse cx="28" cy="50" rx="7" ry="4" fill="url(#cheek)"/>
+            <ellipse cx="72" cy="50" rx="7" ry="4" fill="url(#cheek)"/>
+            <circle cx="36" cy="44" r="11" fill="#F0E7D0" stroke="#1F241E" stroke-width="1.8"/>
+            <circle cx="64" cy="44" r="11" fill="#F0E7D0" stroke="#1F241E" stroke-width="1.8"/>
+            <path d="M47 44 L53 44" stroke="#1F241E" stroke-width="1.8"/>
+            <circle cx="36" cy="44" r="6" fill="#1F241E"/>
+            <circle cx="64" cy="44" r="6" fill="#1F241E"/>
+            <circle cx="38" cy="42" r="1.8" fill="#fff"/>
+            <circle cx="66" cy="42" r="1.8" fill="#fff"/>
+            <path d="M43 62 Q50 67 57 62" stroke="#1F241E" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="mascot-bubble">
+          Twelve days. Don't break the chain.
+          <span class="sig">— Professor Xeno</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- CONTENT -->
+    <main class="content">
+
+      <div class="page" id="page-dashboard">
+
+      <div class="top">
+        <div>
+          <div class="eyebrow"><span class="dot"></span> Dashboard</div>
+          <h1 class="greeting">Good afternoon, Leo — <em>you're on a roll.</em></h1>
+          <div class="greeting-sub">Twelve days locked in. Saturday, Aug 8 · no session running.</div>
+        </div>
+        <button class="overall-btn active" id="overallBtnGlobal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+          Overall
+        </button>
+      </div>
+
+      <!-- Row 1: streak + trend -->
+      <div class="dash-grid">
+
+        <!-- STREAK -->
+        <section class="card">
+          <div class="streak-eyebrow">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3s5 6 5 11a5 5 0 01-10 0c0-2 1-3 1-3s2 3 4 3c0-4-2-6 0-11z"/></svg>
+            Current streak
+          </div>
+          <div class="streak-headline">
+            <span class="streak-num">0</span>
+            <span class="streak-word">days in a row</span>
+          </div>
+          <div class="streak-side">
+            <span>best ever <b>0</b></span>
+            <span>this month <b>0m</b></span>
+          </div>
+
+          <div class="cal-head">
+            <div class="cal-title-row">August 2026</div>
+            <div class="cal-nav">
+              <button aria-label="Prev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg></button>
+              <button aria-label="Next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></button>
+            </div>
+          </div>
+
+          <div class="cal-grid" id="calGrid">
+            <!-- populated by JS -->
+          </div>
+
+          <div class="cal-legend">
+            <span class="hint">Click a day · Shift-click to range</span>
+            <span class="legend-scale">
+              less
+              <span class="legend-swatch" style="background:var(--paper-2);"></span>
+              <span class="legend-swatch" style="background:color-mix(in oklab, var(--moss) 22%, var(--paper-2));"></span>
+              <span class="legend-swatch" style="background:color-mix(in oklab, var(--moss) 50%, var(--paper-2));"></span>
+              <span class="legend-swatch" style="background:var(--moss);"></span>
+              more
+            </span>
+          </div>
+        </section>
+
+        <!-- TREND -->
+        <section class="card">
+          <div class="card-head">
+            <div class="card-title" id="trendTitle">Attention span</div>
+            <button class="overall-btn" id="overallBtnTrend">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+              Overall
+            </button>
+          </div>
+          <div class="trend-headline">
+            <span class="trend-num" id="trendNum">0<span class="pct"> min</span></span>
+            <span class="trend-delta" id="trendDelta">0 sessions</span>
+          </div>
+          <div class="trend-sub" id="trendSub">last 14 days · avg daily focus</div>
+          <div class="trend-viz" id="trendViz"></div>
+          <div class="trend-labels" id="trendLabels"></div>
+        </section>
+      </div>
+
+      <!-- Row 2: stat tiles -->
+      <div class="tiles">
+        <div class="tile"><div class="k">This week</div><div class="v">0<small>m</small></div><div class="sub">this week</div></div>
+        <div class="tile"><div class="k">On-task avg</div><div class="v">0<small>%</small></div><div class="sub">overall average</div></div>
+        <div class="tile"><div class="k">Top drift</div><div class="v" style="font-size:19px;">None</div><div class="sub">0m this week</div></div>
+        <div class="tile"><div class="k">Points</div><div class="v">0</div><div class="sub">+0 last session</div></div>
+      </div>
+
+      <!-- Row 3: sessions + distractions -->
+      <div class="bottom-grid">
+        <section class="card">
+          <div class="card-head">
+            <div class="card-title" id="sessionsTitle">Recent sessions</div>
+            <div class="card-meta" id="sessionsMeta">last 5</div>
+          </div>
+          <div class="session-list" id="sessionList"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <div class="card-title">Biggest distractions</div>
+            <div class="card-meta">this week</div>
+          </div>
+          <div class="bar-list"></div>
+        </section>
+      </div>
+
+      <!-- Activity log -->
+      <section class="card" id="dashActivityCard">
+        <div class="card-head">
+          <div class="card-title" id="dashActivityTitle">Activity today</div>
+          <div class="card-meta" id="dashActivityMeta">5 apps</div>
+        </div>
+        <div class="activity-list" id="dashActivityList"></div>
+      </section>
+
+      <!-- Row 4: AI what-if + wellbeing -->
+      <div class="insight-grid">
+        <section class="insight-card whatif" id="insightWhatIf">
+          <div class="insight-eyebrow">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+            What that time could've been
+          </div>
+          <div id="insightWhatIfBody">
+            <div class="empty-state">Complete a few sessions to unlock insights.</div>
+          </div>
+        </section>
+
+        <section class="insight-card mind" id="insightMind">
+          <div class="insight-eyebrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21s-8-4.5-8-11a5 5 0 019-3 5 5 0 019 3c0 6.5-8 11-8 11z"/></svg>
+            Mind check-in
+          </div>
+          <div id="insightMindBody">
+            <div class="empty-state">Need more data to spot patterns. Keep going!</div>
+          </div>
+        </section>
+      </div>
+
+      </div>
+      <!-- /page-dashboard -->
+
+      <!-- ================= SESSION PAGE ================= -->
+      <div class="page" id="page-session" style="display:none;">
+
+        <div class="session-goal-block">
+          <h1 class="session-goal">
+            Finish <em>Chapter&nbsp;4 practice set</em> — problems 12 through 28, work shown in Overleaf.
+          </h1>
+          <div class="session-goal-meta">
+            <span>Started 2:14 PM</span>
+            <span class="sep">·</span>
+            <span>90-minute timer</span>
+          </div>
+        </div>
+
+        <div class="session-metrics" id="sessionMetricsBar">
+          <div class="session-metric focus">
+            <div class="label">On task</div>
+            <div class="value" id="sMetOnTask">&mdash;<span class="unit">%</span></div>
+            <div class="sub" id="sMetOnTaskSub">&mdash;</div>
+          </div>
+          <div class="session-metric">
+            <div class="label">Elapsed</div>
+            <div class="value" id="sMetElapsed">&mdash;:&mdash;&mdash;</div>
+            <div class="sub" id="sMetElapsedSub">&mdash;</div>
+          </div>
+          <div class="session-metric">
+            <div class="label">Deep focus</div>
+            <div class="value" id="sMetDeep">&mdash;:&mdash;&mdash;</div>
+            <div class="sub" id="sMetDeepSub">&mdash;</div>
+          </div>
+          <div class="session-metric">
+            <div class="label">Drifts</div>
+            <div class="value" id="sMetDrifts">&mdash;</div>
+            <div class="sub" id="sMetDriftsSub">&mdash;</div>
+          </div>
+        </div>
+
+        <div class="session-now" id="sessionNowBar" style="display:none;">
+          <span class="glyph" aria-hidden="true">Ov</span>
+          <span class="path">Overleaf <span class="muted">— ch04_practice.tex · line 128</span></span>
+          <span class="verdict">on task</span>
+        </div>
+
+        <div class="session-timeline">
+          <div class="session-timeline-head">
+            <span class="h">Focus this session</span>
+          </div>
+          <div class="session-timeline-viz" id="sessionTimelineViz"></div>
+          <div class="session-timeline-labels">
+            <span>2:14</span><span>2:24</span><span>2:34</span><span>2:44</span><span>now</span>
+          </div>
+        </div>
+
+        <section class="card" id="sessionActivityCard" style="display:none;">
+          <div class="card-head">
+            <div class="card-title">Activity this session</div>
+            <div class="card-meta">live</div>
+          </div>
+          <div class="activity-list" id="sessionActivityList"></div>
+        </section>
+
+        <div class="session-actions">
+          <button class="btn demo" id="demoDriftBtn" style="display:none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4M12 17h.01M10.3 3.86 1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L14.7 3.86a2 2 0 00-3.4 0Z"/></svg>
+            Simulate drift <span class="tag">demo</span>
+          </button>
+          <button class="btn primary" id="startSessionBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2 3 14h6l-1 8 10-12h-6l1-8Z"/></svg>
+            Start session
+          </button>
+        </div>
+
+      </div>
+      <!-- /page-session -->
+
+      <!-- ================= SETTINGS PAGE ================= -->
+      <div class="page" id="page-settings" style="display:none;">
+
+        <div class="top">
+          <div>
+            <div class="eyebrow"><span class="dot"></span> Settings</div>
+            <h1 class="greeting">Tune how <em>Invigil</em> watches.</h1>
+            <div class="greeting-sub">Changes apply to future sessions — this stays on-device.</div>
+          </div>
+        </div>
+
+        <section class="card settings-card">
+          <div class="card-head">
+            <div class="card-title">Work allowlist</div>
+            <div class="card-meta">sites, apps &amp; channels that always count as on-task</div>
+          </div>
+          <div class="tag-input-box" id="allowTagBox">
+            <span class="tag-pill-list" id="allowTagList"></span>
+            <input type="text" class="tag-input" id="allowTagInput" placeholder="Add a site, app, or channel (Enter or comma)">
+          </div>
+          <div class="chip-row" id="allowChips"></div>
+        </section>
+
+        <section class="card settings-card">
+          <div class="card-head">
+            <div class="card-title">Distraction denylist</div>
+            <div class="card-meta">sites &amp; apps that always trigger a drift check</div>
+          </div>
+          <div class="tag-input-box" id="denyTagBox">
+            <span class="tag-pill-list" id="denyTagList"></span>
+            <input type="text" class="tag-input" id="denyTagInput" placeholder="Add a site or app (Enter or comma)">
+          </div>
+          <div class="chip-row" id="denyChips"></div>
+        </section>
+
+        <section class="card settings-card">
+          <div class="card-head">
+            <div class="card-title">Inactivity window</div>
+            <div class="card-meta">pause tracking when idle, resume on activity</div>
+          </div>
+          <p class="settings-desc">If your mouse and keyboard sit idle this long, Invigil pauses the session clock instead of flagging you as off-task. It resumes the instant you're back. Exception: watching a video counts as active even without input, so playback won't trigger a pause.</p>
+          <div class="time-custom-box idle-box" id="idleTimeoutBox">
+            <input type="number" min="1" id="idleTimeoutInput" value="45">
+            <span class="unit">sec</span>
+          </div>
+        </section>
+
+      </div>
+      <!-- /page-settings -->
+
+    </main>
+  </div>
+</div>
+
+<!-- ================= START SESSION MODAL ================= -->
+<div class="modal-backdrop" id="startModalBackdrop" style="display:none;">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-icon">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 3 14h6l-1 8 10-12h-6l1-8Z"/></svg>
+      </div>
+      <h2>I'll focus&hellip;</h2>
+    </div>
+
+    <div class="modal-field">
+      <label>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.5" fill="currentColor" stroke-width="2"/></svg>
+        What's your task today?
+      </label>
+      <input type="text" placeholder="I will study math.">
+    </div>
+
+    <div class="modal-field">
+      <label for="startDescriptionInput">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
+        Detailed Description (min 25 characters)
+      </label>
+      <div class="desc-input-box" id="descInputBox">
+        <textarea id="startDescriptionInput" rows="3" placeholder="Describe what you will work on in detail (e.g., 'Going to study integral calculus concepts and watch tutorial videos on integration techniques')..."></textarea>
+        <div class="desc-char-counter" id="descCharCount">0 / 25 min chars</div>
+      </div>
+    </div>
+
+    <div class="modal-field">
+      <label>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 2h6"/></svg>
+        Expected focus time?
+      </label>
+      <div class="focus-time-row">
+        <div class="time-custom-box" id="timeCustomBox">
+          <input type="number" min="1" id="timeCustomInput" placeholder="Custom">
+          <span class="unit">min</span>
+        </div>
+        <button class="time-pill selected" data-min="25">25 min</button>
+        <button class="time-pill" data-min="45">45 min</button>
+        <button class="time-pill" data-min="60">60 min</button>
+        <button class="time-pill endless" data-min="endless">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 15a4 4 0 110-6c1.5 0 2.5 1 3.5 2.5C11.5 13 12.5 15 14 15a4 4 0 100-6c-1.5 0-2.5 1-3.5 2.5"/></svg>
+          Endless
+        </button>
+      </div>
+    </div>
+
+    <button class="btn primary modal-start" id="modalStartBtn">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 3 14h6l-1 8 10-12h-6l1-8Z"/></svg>
+      Start
+    </button>
+  </div>
+</div>
+
+<!-- ================= SESSION SUMMARY MODAL ================= -->
+<div class="modal-backdrop" id="summaryModalBackdrop" style="display:none;">
+  <div class="modal-card summary-card">
+    <div class="modal-head">
+      <div class="modal-icon summary-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+      </div>
+      <div class="modal-headings">
+        <h2>Session complete</h2>
+        <div class="summary-goal">Calc HW — Chapter 4 practice set</div>
+      </div>
+    </div>
+
+    <div class="summary-metrics">
+      <div class="summary-metric">
+        <div class="label">On task</div>
+        <div class="value"><span class="cv">0</span><span class="unit">%</span></div>
+      </div>
+      <div class="summary-metric">
+        <div class="label">Locked in</div>
+        <div class="value"><span class="cv">0</span><span class="unit">min</span></div>
+      </div>
+      <div class="summary-metric">
+        <div class="label">Drifts</div>
+        <div class="value"><span class="cv">0</span></div>
+      </div>
+    </div>
+
+    <div class="summary-points s-hide" id="summaryPointsBox">
+      <div class="summary-breakdown" id="summaryBreakdown">
+        <span class="s-fade">36 min &times; 50</span><span class="v s-fade" id="sbVal0">0</span>
+        <span class="s-fade">3 distractions &times; &minus;100</span><span class="v down s-fade" id="sbVal1">0</span>
+        <span class="s-fade">streak bonus</span><span class="v up s-fade">&times;1.5</span>
+      </div>
+      <div class="summary-total-row" id="summaryTotalRow" style="opacity:0;transform:scale(0);">
+        <span class="k">Total</span>
+        <span class="total-val" id="summaryTotalVal">+0</span>
+      </div>
+    </div>
+
+    <div class="summary-note s-hide" id="summaryNote">
+      Twelve days running now. Rough patch around minute twenty — otherwise a clean lock-in.
+      <span class="sig">— Professor Xeno</span>
+    </div>
+
+    <button class="btn primary modal-start s-hide" id="summaryDoneBtn">Back to dashboard</button>
+  </div>
+</div>
+
+<!-- ================= CYBERPUNK DRIFT ALERT OVERLAY ================= -->
+<div class="cyber-overlay" id="cyberOverlay" style="display:none;">
+  <div class="cyber-vignette"></div>
+  <div class="cyber-ticker-row row-top"><div class="cyber-ticker-track" id="cyberTickerTop"></div></div>
+  <div class="cyber-ticker-row row-second"><div class="cyber-ticker-track" id="cyberTickerBottom"></div></div>
+  <div class="cyber-content" id="cyberContent">
+    <div class="cyber-tag"><span class="blink"></span> Drift detected</div>
+    <h2 class="cyber-glitch" data-text="YOU'RE OFF TASK">YOU'RE OFF TASK</h2>
+    <p class="cyber-sub">Discord — <em>#general</em> &middot; 47s away from <em>Calc HW</em></p>
+    <div class="cyber-actions">
+      <button class="cyber-btn ghost" id="cyberWorkBtn">This is actually work</button>
+      <button class="cyber-btn primary" id="cyberBackBtn">I'll get back to work</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ================= LEAF LETOUT OVERLAY CARD ================= -->
+<div class="leaf-letout-card" id="leafLetoutCard" style="display: none;">
+  <div class="leaf-card-handle">
+    <svg class="leaf-icon" viewBox="0 0 24 24" fill="none">
+      <path d="M4 20c0-8 6-14 16-14-1 9-6 15-16 15z" fill="#7E9865"/>
+      <path d="M4 20c4-3 8-6 11-9" stroke="#F0E7D0" stroke-width="1.4" stroke-linecap="round"/>
+    </svg>
+    <span class="leaf-peek-label">FOCUS</span>
+    <span class="leaf-peek-time" id="leafRemainingTime">--:--</span>
+  </div>
+  <div class="leaf-card-content">
+    <div class="leaf-sec leaf-app">
+      <span class="leaf-label">CURRENT APP</span>
+      <span class="leaf-val" id="leafActiveApp">Initializing…</span>
+    </div>
+    <div class="leaf-divider"></div>
+    <div class="leaf-sec leaf-xeno">
+      <span class="leaf-label">PROF. XENO</span>
+      <span class="leaf-val" id="leafXenoComment">"Lock in. The stars favor the focused."</span>
+    </div>
+  </div>
+  <div class="leaf-card-action">
+    <button class="leaf-stop-btn" id="leafStopBtn" title="End Session">
+      <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      <span>End Session</span>
+    </button>
+  </div>
+</div>
+
+  <script src='main.js'></script>
+</body>
+</html>
