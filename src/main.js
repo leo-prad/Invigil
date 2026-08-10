@@ -53,9 +53,13 @@ async function init() {
   try {
     liveData = await invoke('get_dashboard_data');
   } catch (e) {
-    console.warn('No backend data yet, using demo mode:', e);
-    liveData = null;
+    console.warn('No backend data yet:', e);
   }
+
+  buildCalendar();
+  setMode({ mode: 'overall', start: null, end: null });
+  updateGreeting();
+  updateStatTiles();
 
   // Check if a session is already running (e.g. app restart)
   try {
@@ -70,14 +74,11 @@ async function init() {
     console.warn('Could not get session state:', e);
   }
 
-  buildCalendar();
-  setMode({ mode: 'overall', start: null, end: null });
   setSessionOffState();
   renderDashActivity();
   renderInsights();
   setupListeners();
   setupSettings();
-  updateGreeting();
 }
 
 // ─── Greeting ────────────────────────────────────────────────────────
@@ -917,6 +918,15 @@ function createTagField({ boxId, listId, inputId, chipsId, suggestions, initialT
   const list = document.getElementById(listId);
   const input = document.getElementById(inputId);
   const chipsRow = document.getElementById(chipsId);
+
+  // Guard: if the markup for this field isn't present, return a no-op stub so
+  // module-load doesn't throw and halt init().
+  if (!box || !list || !input || !chipsRow) {
+    return {
+      get tags() { return tags.slice(); },
+      updateSuggestions(newSugg) { suggestions = (newSugg || []).slice(); }
+    };
+  }
 
   function renderTags() {
     list.innerHTML = tags.map((t, i) => `

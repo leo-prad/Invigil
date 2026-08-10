@@ -311,29 +311,10 @@ impl SessionManager {
             }
         };
 
-        // System idle detection for inactivity drift
+        // System idle detection for inactivity (does not erase active app name)
         let idle_sec = monitor::get_idle_seconds();
         let idle_limit = self.idle_timeout_sec as u64;
-
-        if idle_sec >= idle_limit && idle_limit > 0 {
-            let mut state = self.state.lock();
-            if !state.active { return None; }
-            state.elapsed_sec += 5;
-            state.idle_sec += 5;
-            state.is_idle = true;
-            state.drift_count += 1;
-            state.current_status = "off_task".into();
-            state.current_app = "Inactivity Detected".into();
-            state.current_detail = format!("No input for {}s — Away from controls", idle_sec);
-
-            return Some(TickResult {
-                state: state.clone(),
-                drift_triggered: true,
-                drift_app: "Inactivity Detected".into(),
-                drift_detail: format!("No keyboard or mouse input for {}s", idle_sec),
-                session_expired: false,
-            });
-        }
+        let is_currently_idle = idle_limit > 0 && idle_sec >= idle_limit;
 
         // Re-acquire lock to update session state safely
         let mut state = self.state.lock();
@@ -341,10 +322,13 @@ impl SessionManager {
             return None;
         }
 
+        state.is_idle = is_currently_idle;
         state.elapsed_sec += 5;
         state.current_app = app_name.clone();
         let mut final_detail = detail.clone();
-        if idle_sec >= 20 && status == "on_task" {
+        if is_currently_idle {
+            final_detail = format!("(Away from controls) {}", detail);
+        } else if idle_sec >= 20 && status == "on_task" {
             final_detail = format!("(Deep reading) {}", detail);
         }
         state.current_detail = final_detail;
