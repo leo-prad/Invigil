@@ -297,6 +297,39 @@
           </button>
         </div>
 
+        <!-- Advanced Telemetry Panel -->
+        <div class="adv-panel" id="advPanel" style="display:none;">
+          <button class="adv-toggle" id="advToggle">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+            <span>Advanced telemetry</span>
+            <svg class="adv-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="adv-body" id="advBody" style="display:none;">
+            <div class="adv-grid">
+              <div class="adv-card">
+                <div class="adv-card-head">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                  <span>AI compute</span>
+                </div>
+                <div class="adv-stat" id="advAiCalls">0</div>
+                <div class="adv-label">LLM calls this session</div>
+                <div class="adv-bar-track"><div class="adv-bar-fill" id="advAiBar" style="width:0%"></div></div>
+                <div class="adv-sub" id="advAiStatus">Ollama idle</div>
+              </div>
+              <div class="adv-card">
+                <div class="adv-card-head">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                  <span>System impact</span>
+                </div>
+                <div class="adv-stat" id="advCpu">—%</div>
+                <div class="adv-label">CPU usage (Invigil)</div>
+                <div class="adv-bar-track"><div class="adv-bar-fill moss" id="advCpuBar" style="width:0%"></div></div>
+                <div class="adv-sub" id="advMemory">Memory: —</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
       <!-- /page-session -->
 
@@ -310,18 +343,6 @@
             <div class="greeting-sub">Changes apply to future sessions — this stays on-device.</div>
           </div>
         </div>
-
-        <section class="card settings-card">
-          <div class="card-head">
-            <div class="card-title">Work allowlist</div>
-            <div class="card-meta">sites, apps &amp; channels that always count as on-task</div>
-          </div>
-          <div class="tag-input-box" id="allowTagBox">
-            <span class="tag-pill-list" id="allowTagList"></span>
-            <input type="text" class="tag-input" id="allowTagInput" placeholder="Add a site, app, or channel (Enter or comma)">
-          </div>
-          <div class="chip-row" id="allowChips"></div>
-        </section>
 
         <section class="card settings-card">
           <div class="card-head">
@@ -380,6 +401,7 @@
       <div class="desc-input-box" id="descInputBox">
         <textarea id="startDescriptionInput" rows="3" placeholder="Describe what you will work on in detail (e.g., 'Going to study integral calculus concepts and watch tutorial videos on integration techniques')..."></textarea>
         <div class="desc-char-counter" id="descCharCount">0 / 25 min chars</div>
+        <div class="desc-denial-reason" id="descDenialReason" style="display:none;"></div>
       </div>
     </div>
 

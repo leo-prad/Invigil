@@ -36,13 +36,9 @@ pub fn classify_tier0(window: &WindowInfo, profile: &Profile) -> (Classification
         }
     }
 
-    // Known always-work apps (system-level allowlist)
+    // Known always-work apps (universally educational — never entertainment)
     let system_work = [
-        "overleaf", "desmos", "notion", "obsidian", "anki",
-        "latex", "texstudio", "texmaker", "zotero",
-        "antigravity", "code", "visual studio", "cursor",
-        "pycharm", "intellij", "sublime", "canvas", "blackboard",
-        "chatgpt", "claude", "github", "stack overflow",
+        "canvas", "blackboard", "anki",
     ];
     for app in &system_work {
         if title_lower.contains(app) || process_lower.contains(app) {
@@ -61,8 +57,14 @@ pub fn classify_tier0(window: &WindowInfo, profile: &Profile) -> (Classification
         }
     }
 
-    // Dual-use apps need deeper inspection
-    let dual_use = ["chrome", "firefox", "edge", "brave", "safari", "discord", "slack"];
+    // Dual-use apps need LLM inspection against the session goal
+    let dual_use = [
+        "chrome", "firefox", "edge", "brave", "safari", "discord", "slack",
+        "overleaf", "desmos", "notion", "obsidian",
+        "latex", "texstudio", "texmaker", "zotero", "antigravity",
+        "code", "visual studio", "cursor", "pycharm", "intellij", "sublime",
+        "chatgpt", "claude", "github", "stack overflow",
+    ];
     for app in &dual_use {
         if process_lower.contains(app) || title_lower.contains(app) {
             // For browsers, the tab title is the window title — check against lists again

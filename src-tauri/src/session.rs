@@ -108,6 +108,8 @@ pub struct SessionManager {
     last_window_title: Arc<Mutex<String>>,
     // Tier 1 LLM availability (checked once at start)
     ollama_available: Arc<Mutex<bool>>,
+    // Wall-clock timestamp of the last tick (for accurate elapsed time)
+    last_tick_at: Arc<Mutex<Option<chrono::DateTime<Utc>>>>,
 }
 
 impl SessionManager {
@@ -131,6 +133,7 @@ impl SessionManager {
             last_category: Arc::new(Mutex::new(String::new())),
             last_window_title: Arc::new(Mutex::new(String::new())),
             ollama_available: Arc::new(Mutex::new(ollama_up)),
+            last_tick_at: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -172,6 +175,7 @@ impl SessionManager {
         *self.last_category.lock() = String::new();
         *self.last_window_title.lock() = String::new();
         *self.idle_counter.lock() = 0;
+        *self.last_tick_at.lock() = Some(Utc::now());
 
         // Mark today as focused
         let today = Utc::now().format("%Y-%m-%d").to_string();
@@ -316,6 +320,15 @@ impl SessionManager {
         let idle_limit = self.idle_timeout_sec as u64;
         let is_currently_idle = idle_limit > 0 && idle_sec >= idle_limit;
 
+        // Compute actual wall-clock delta since last tick
+        let now_ts = Utc::now();
+        let delta = {
+            let mut last = self.last_tick_at.lock();
+            let d = last.map(|t| (now_ts - t).num_seconds()).unwrap_or(5);
+            *last = Some(now_ts);
+            d.max(1)
+        };
+
         // Re-acquire lock to update session state safely
         let mut state = self.state.lock();
         if !state.active {
@@ -323,7 +336,7 @@ impl SessionManager {
         }
 
         state.is_idle = is_currently_idle;
-        state.elapsed_sec += 5;
+        state.elapsed_sec += delta;
         state.current_app = app_name.clone();
         let mut final_detail = detail.clone();
         if is_currently_idle {
@@ -342,31 +355,31 @@ impl SessionManager {
                 // Just started drifting — begin grace period
                 state.grace_remaining_sec = self.grace_period_sec;
             } else if state.grace_remaining_sec > 0 {
-                state.grace_remaining_sec -= 5;
+                state.grace_remaining_sec -= delta;
             }
 
             if state.grace_remaining_sec <= 0 {
                 // Grace expired — this is a real drift
-                state.off_task_sec += 5;
+                state.off_task_sec += delta;
                 state.current_status = "off_task".into();
                 state.current_streak_sec = 0;
 
-                if prev_status != "off_task" || state.grace_remaining_sec == 0 - 5 {
+                if prev_status != "off_task" || state.grace_remaining_sec == 0 - delta {
                     // First tick after grace expiry — trigger overlay
                     state.drift_count += 1;
                     drift_triggered = true;
                 }
             } else {
                 // Still in grace period — count as on-task
-                state.on_task_sec += 5;
+                state.on_task_sec += delta;
                 state.current_status = "on_task".into();
-                state.current_streak_sec += 5;
+                state.current_streak_sec += delta;
             }
         } else {
             // On task
-            state.on_task_sec += 5;
+            state.on_task_sec += delta;
             state.current_status = "on_task".into();
-            state.current_streak_sec += 5;
+            state.current_streak_sec += delta;
             state.grace_remaining_sec = 0;
 
             if state.current_streak_sec > state.deep_focus_sec {

@@ -57,6 +57,36 @@ async function init() {
   }
 
   buildCalendar();
+
+  // Calendar month navigation
+  const calNav = document.querySelector('.cal-nav');
+  if (calNav) {
+    const [prevBtn, nextBtn] = calNav.querySelectorAll('button');
+    prevBtn.addEventListener('click', () => {
+      calViewMonth--;
+      if (calViewMonth < 0) { calViewMonth = 11; calViewYear--; }
+      buildCalendar();
+    });
+    nextBtn.addEventListener('click', () => {
+      calViewMonth++;
+      if (calViewMonth > 11) { calViewMonth = 0; calViewYear++; }
+      buildCalendar();
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    const dashboardVisible = document.getElementById('dashboard')?.style.display !== 'none';
+    if (!dashboardVisible) return;
+    if (e.key === 'ArrowLeft') {
+      calViewMonth--;
+      if (calViewMonth < 0) { calViewMonth = 11; calViewYear--; }
+      buildCalendar();
+    } else if (e.key === 'ArrowRight') {
+      calViewMonth++;
+      if (calViewMonth > 11) { calViewMonth = 0; calViewYear++; }
+      buildCalendar();
+    }
+  });
+
   setMode({ mode: 'overall', start: null, end: null });
   updateGreeting();
   updateStatTiles();
@@ -79,6 +109,7 @@ async function init() {
   renderInsights();
   setupListeners();
   setupSettings();
+  setupAdvPanel();
 }
 
 // ─── Greeting ────────────────────────────────────────────────────────
@@ -169,11 +200,14 @@ function updateStatTiles() {
 
 // ─── Calendar ────────────────────────────────────────────────────────
 
+let calViewYear = new Date().getFullYear();
+let calViewMonth = new Date().getMonth();
+
 function buildCalendar() {
   const root = document.getElementById('calGrid');
   const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth(); // 0-indexed
+  const year = calViewYear;
+  const month = calViewMonth;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstDow = new Date(year, month, 1).getDay(); // 0=Sun
 
@@ -683,6 +717,8 @@ function setSessionUI(active) {
     document.getElementById('sessionNowBar').style.display = '';
     document.getElementById('sessionActivityCard').style.display = '';
     if (leafCard) leafCard.style.display = 'flex';
+    const advP = document.getElementById('advPanel');
+    if (advP) advP.style.display = '';
   } else {
     startSessionBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2 3 14h6l-1 8 10-12h-6l1-8Z"/></svg> Start session`;
     startSessionBtn.classList.remove('danger');
@@ -690,6 +726,8 @@ function setSessionUI(active) {
     document.getElementById('sessionNowBar').style.display = 'none';
     document.getElementById('sessionActivityCard').style.display = 'none';
     if (leafCard) leafCard.style.display = 'none';
+    const advP2 = document.getElementById('advPanel');
+    if (advP2) { advP2.style.display = 'none'; advP2.classList.remove('open'); advPanelOpen = false; }
     setSessionOffState();
   }
 }
@@ -800,14 +838,19 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
 
   // Validate task goal and description using Gemma AI
   try {
-    const isValid = await invoke('validate_goal', { goal, description });
-    if (!isValid) {
+    const reason = await invoke('validate_goal', { goal, description });
+    if (reason) {
       if (descInputBox) {
         descInputBox.classList.remove('error');
         void descInputBox.offsetWidth;
         descInputBox.classList.add('error');
       }
       if (descCharCounter) descCharCounter.classList.add('invalid');
+      const denialEl = document.getElementById('descDenialReason');
+      if (denialEl) {
+        denialEl.textContent = reason;
+        denialEl.style.display = '';
+      }
       modalStartBtn.disabled = false;
       modalStartBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 3 14h6l-1 8 10-12h-6l1-8Z"/></svg> Start`;
       return;
@@ -815,6 +858,9 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
   } catch (e) {
     console.warn('Goal validation check failed:', e);
   }
+  // Clear any previous denial reason
+  const denialEl = document.getElementById('descDenialReason');
+  if (denialEl) denialEl.style.display = 'none';
 
   startModal.style.display = 'none';
   modalStartBtn.disabled = false;
@@ -1022,6 +1068,8 @@ function roulette(el, newText, prevText) {
 // ─── Session metrics ─────────────────────────────────────────────────
 
 function setSessionOffState() {
+  _lastActivityKey = '';
+  _lastTimelineKey = '';
   document.getElementById('sMetOnTask').textContent = '—';
   document.getElementById('sMetElapsed').textContent = '—:——';
   document.getElementById('sMetDeep').textContent = '—:——';
@@ -1106,23 +1154,86 @@ function applySessionState(s) {
       leafApp.title = appDisplay;
     }
 
-    // Prof Xeno 1-liner comment
+    // Prof Xeno 1-liner comment — dynamic rotating pool
     const leafXeno = document.getElementById('leafXenoComment');
     if (leafXeno) {
-      let xenoText = '"Lock in. The stars favor the focused."';
-      if (s.current_status === 'off_task') {
-        xenoText = `"${s.current_app || 'Drift'} detected! Return to your goal."`;
-      } else if (s.current_streak_sec >= 900) {
-        xenoText = '"15m+ unbroken focus! Pure galaxy brain."';
-      } else if (s.current_streak_sec >= 300) {
-        xenoText = '"Deep work momentum established."';
-      } else if (s.goal) {
-        xenoText = `"${s.goal} — keep pushing."`;
-      }
-      leafXeno.textContent = xenoText;
+      leafXeno.textContent = getXenoMessage(s);
     }
   }
 }
+
+// ─── Prof. Xeno dynamic message system ──────────────────────────────
+
+const XENO_MSGS = {
+  drift: [
+    app => `"${app} again? The cosmos weeps."`,
+    app => `"${app} is a black hole for your potential."`,
+    app => `"Drift detected. Recalibrate, stargazer."`,
+    app => `"${app}? That's not in your star chart today."`,
+    app => `"The signal is fading… return to mission."`,
+    app => `"You wandered off-orbit. Course-correct now."`,
+    app => `"${app} won't get you tenure in this galaxy."`,
+    app => `"Gravitational pull from ${app}. Resist it."`,
+  ],
+  streak_long: [
+    `"15m+ unbroken focus. Galaxy brain unlocked."`,
+    `"You're in the deep field now. Beautiful."`,
+    `"Sustained orbit achieved. Keep burning steady."`,
+    `"Your focus signature is off the charts."`,
+    `"This is what peak cognition looks like."`,
+    `"The universe bends to the disciplined mind."`,
+  ],
+  streak_mid: [
+    `"Deep work momentum established. Stay locked."`,
+    `"5 minutes of clean signal. Don't break it."`,
+    `"You're building velocity. I can feel it."`,
+    `"Focus is compounding. Keep the chain going."`,
+    `"The noise is fading. You're in the zone."`,
+  ],
+  on_task: [
+    goal => `"${goal} — the mission continues."`,
+    goal => `"Steady hands, clear mind. ${goal} awaits."`,
+    goal => `"Channel everything into ${goal}."`,
+    goal => `"Lock in. The stars favor the focused."`,
+    goal => `"One task, total commitment. That's the way."`,
+    goal => `"${goal} won't finish itself. You've got this."`,
+  ],
+  idle: [
+    `"Awaiting your signal, operator."`,
+    `"The lab is quiet. Begin when ready."`,
+    `"Systems nominal. Waiting for ignition."`,
+    `"Prof. Xeno is watching. No pressure."`,
+  ],
+};
+let xenoLastIdx = {}, xenoLastChange = 0;
+
+function getXenoMessage(s) {
+  const now = Date.now();
+  if (now - xenoLastChange < 15000 && leafXenoCache) return leafXenoCache;
+  xenoLastChange = now;
+
+  let pool, key, arg;
+  if (s.current_status === 'off_task') {
+    key = 'drift'; pool = XENO_MSGS.drift; arg = s.current_app || 'Drift';
+  } else if (s.current_streak_sec >= 900) {
+    key = 'streak_long'; pool = XENO_MSGS.streak_long;
+  } else if (s.current_streak_sec >= 300) {
+    key = 'streak_mid'; pool = XENO_MSGS.streak_mid;
+  } else if (s.goal) {
+    key = 'on_task'; pool = XENO_MSGS.on_task; arg = s.goal;
+  } else {
+    key = 'idle'; pool = XENO_MSGS.idle;
+  }
+
+  let idx = (xenoLastIdx[key] || 0) + 1;
+  if (idx >= pool.length) idx = 0;
+  xenoLastIdx[key] = idx;
+
+  const entry = pool[idx];
+  leafXenoCache = typeof entry === 'function' ? entry(arg) : entry;
+  return leafXenoCache;
+}
+let leafXenoCache = '';
 
 function startLocalTimer(durationMin) {
   if (timerInterval) clearInterval(timerInterval);
@@ -1138,11 +1249,18 @@ function startLocalTimer(durationMin) {
 
 // ─── Session activity (live) ─────────────────────────────────────────
 
+let _lastActivityKey = '';
+let _lastTimelineKey = '';
+
 function renderSessionActivity() {
   const list = document.getElementById('sessionActivityList');
   if (!list || !currentSessionId) return;
   invoke('get_session_intervals', { sessionId: currentSessionId }).then(intervals => {
-    renderActivityList(list, intervals.slice(-10));
+    const recent = intervals.slice(-10);
+    const key = recent.map(a => `${a.process_name}|${a.start_ts}|${a.end_ts}|${a.status}`).join(';');
+    if (key === _lastActivityKey) return;
+    _lastActivityKey = key;
+    renderActivityList(list, recent);
   }).catch(() => {});
 }
 
@@ -1151,22 +1269,22 @@ function renderSessionActivity() {
 function getAppIconHtml(category, procName) {
   const cat = (category || procName || '').toLowerCase();
   if (cat.includes('chrome')) {
-    return `<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="#4285F4"/><circle cx="12" cy="12" r="4" fill="#FFF"/><circle cx="12" cy="12" r="3" fill="#4285F4"/><path d="M12 2a10 10 0 0 1 8.66 5H12" fill="#EA4335"/><path d="M20.66 7A10 10 0 0 1 12 22v-10" fill="#FBBC05"/><path d="M12 22a10 10 0 0 1-8.66-15H12" fill="#34A853"/></svg>`;
+    return { html: `<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="#4285F4"/><circle cx="12" cy="12" r="4" fill="#FFF"/><circle cx="12" cy="12" r="3" fill="#4285F4"/><path d="M12 2a10 10 0 0 1 8.66 5H12" fill="#EA4335"/><path d="M20.66 7A10 10 0 0 1 12 22v-10" fill="#FBBC05"/><path d="M12 22a10 10 0 0 1-8.66-15H12" fill="#34A853"/></svg>`, hasIcon: true };
   }
   if (cat.includes('antigravity')) {
-    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M12 2L2 22h20L12 2z" fill="url(#agGrad)"/><defs><linearGradient id="agGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#FF4D5E"/><stop offset="50%" stop-color="#3FE8D8"/><stop offset="100%" stop-color="#7A9BB0"/></linearGradient></defs></svg>`;
+    return { html: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M12 2L2 22h20L12 2z" fill="url(#agGrad)"/><defs><linearGradient id="agGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#FF4D5E"/><stop offset="50%" stop-color="#3FE8D8"/><stop offset="100%" stop-color="#7A9BB0"/></linearGradient></defs></svg>`, hasIcon: true };
   }
   if (cat.includes('discord')) {
-    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="#5865F2"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028z"/></svg>`;
+    return { html: `<svg viewBox="0 0 24 24" width="18" height="18" fill="#5865F2"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028z"/></svg>`, hasIcon: true };
   }
   if (cat.includes('youtube')) {
-    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`;
+    return { html: `<svg viewBox="0 0 24 24" width="18" height="18" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`, hasIcon: true };
   }
   if (cat.includes('code') || cat.includes('vs code')) {
-    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="#007ACC"><path d="M23.15 2.587l-15.89 15.89-4.86-4.86L0 16.015l7.26 7.26L24 5.985z"/></svg>`;
+    return { html: `<svg viewBox="0 0 24 24" width="18" height="18" fill="#007ACC"><path d="M23.15 2.587l-15.89 15.89-4.86-4.86L0 16.015l7.26 7.26L24 5.985z"/></svg>`, hasIcon: true };
   }
   const init = (category || procName || '??').slice(0, 2);
-  return `<span style="font-weight:700;font-size:12px;color:#fff;">${init}</span>`;
+  return { html: `<span style="font-weight:700;font-size:12px;color:#fff;">${init}</span>`, hasIcon: false };
 }
 
 function renderSessionTimeline() {
@@ -1175,6 +1293,10 @@ function renderSessionTimeline() {
 
   invoke('get_session_intervals', { sessionId: currentSessionId }).then(intervals => {
     if (!intervals || intervals.length === 0) return;
+
+    const tKey = intervals.map(a => `${a.process_name}|${a.start_ts}|${a.end_ts}|${a.status}`).join(';');
+    if (tKey === _lastTimelineKey) return;
+    _lastTimelineKey = tKey;
 
     const W = 600, H = 50;
     const n = Math.max(intervals.length, 2);
@@ -1227,14 +1349,15 @@ function renderActivityList(container, items) {
   container.innerHTML = orderedItems.map(a => {
     const status = a.status || 'on_task';
     const color = colors[status] || '#666';
-    const iconHtml = getAppIconHtml(a.category, a.process_name);
+    const icon = getAppIconHtml(a.category, a.process_name);
     const startTime = formatTimeShort(a.start_ts);
     const dur = a.end_ts
       ? formatDuration(new Date(a.end_ts) - new Date(a.start_ts))
       : 'now';
     const timeDisplay = startTime ? `${startTime} · ${dur}` : dur;
+    const bgStyle = icon.hasIcon ? 'background:transparent;' : `background:${color};`;
     return `<div class="activity-row">
-      <div class="a-icon" style="background:${color};display:flex;align-items:center;justify-content:center;">${iconHtml}</div>
+      <div class="a-icon" style="${bgStyle}display:flex;align-items:center;justify-content:center;">${icon.html}</div>
       <div><span class="a-name">${a.category || a.process_name}</span> <span class="a-detail">— ${a.window_title || ''}</span></div>
       <div class="a-dur">${timeDisplay}</div>
       <span class="a-badge ${status === 'on_task' ? 'on-task' : 'drift'}">${status === 'on_task' ? 'on task' : 'drift'}</span>
@@ -1283,23 +1406,17 @@ async function setupSettings() {
     console.warn('Could not load settings:', e);
   }
 
-  // Load profiles for allow/deny lists
+  // Load profiles for deny list
   try {
     const profiles = await invoke('get_profiles');
     const defaultProfile = profiles.find(p => p.id === 'default') || profiles[0];
     if (defaultProfile) {
-      const allowField = createTagField({
-        boxId: 'allowTagBox', listId: 'allowTagList', inputId: 'allowTagInput', chipsId: 'allowChips',
-        suggestions: ['Overleaf', 'Desmos', 'Canvas', 'VS Code', 'Google Docs', 'Khan Academy'],
-        initialTags: defaultProfile.allow_patterns || [],
-      });
       const denyField = createTagField({
         boxId: 'denyTagBox', listId: 'denyTagList', inputId: 'denyTagInput', chipsId: 'denyChips',
         suggestions: ['YouTube', 'Discord — #general', 'Instagram', 'Reddit', 'TikTok', 'iMessage web'],
         initialTags: defaultProfile.deny_patterns || [],
       });
 
-      // Auto-save on changes (debounced)
       let saveTimeout;
       const observer = new MutationObserver(() => {
         clearTimeout(saveTimeout);
@@ -1308,25 +1425,17 @@ async function setupSettings() {
             profile: {
               id: defaultProfile.id,
               name: defaultProfile.name,
-              allow_patterns: allowField.tags,
+              allow_patterns: defaultProfile.allow_patterns || [],
               deny_patterns: denyField.tags,
             }
           });
         }, 500);
       });
-      const allowList = document.getElementById('allowTagList');
       const denyList = document.getElementById('denyTagList');
-      if (allowList) observer.observe(allowList, { childList: true, subtree: true });
       if (denyList) observer.observe(denyList, { childList: true, subtree: true });
     }
   } catch (e) {
     console.warn('Could not load profiles:', e);
-    // Fall back to default tag fields
-    createTagField({
-      boxId: 'allowTagBox', listId: 'allowTagList', inputId: 'allowTagInput', chipsId: 'allowChips',
-      suggestions: ['Overleaf', 'Desmos', 'Canvas', 'VS Code', 'Google Docs', 'Khan Academy'],
-      initialTags: ['Overleaf', 'Desmos', 'Canvas'],
-    });
     createTagField({
       boxId: 'denyTagBox', listId: 'denyTagList', inputId: 'denyTagInput', chipsId: 'denyChips',
       suggestions: ['YouTube', 'Discord — #general', 'Instagram', 'Reddit', 'TikTok', 'iMessage web'],
@@ -1344,9 +1453,9 @@ async function setupListeners() {
     if (result?.state) {
       applySessionState(result.state);
       elapsedSec = result.state.elapsed_sec;
-      // Refresh the session timeline and activity every tick
       renderSessionTimeline();
       renderSessionActivity();
+      updateAdvPanel(result.state);
     }
   });
 
@@ -1619,6 +1728,47 @@ function renderMindInsight() {
     </div>
     <div class="insight-foot">Xeno reads your patterns, not your business. This stays on-device.</div>
   `;
+}
+
+// ─── Advanced Telemetry Panel ────────────────────────────────────────
+
+let advPanelOpen = false;
+
+function setupAdvPanel() {
+  const toggle = document.getElementById('advToggle');
+  const panel = document.getElementById('advPanel');
+  const body = document.getElementById('advBody');
+  if (!toggle || !panel) return;
+
+  toggle.addEventListener('click', () => {
+    advPanelOpen = !advPanelOpen;
+    panel.classList.toggle('open', advPanelOpen);
+    if (body) body.style.display = advPanelOpen ? '' : 'none';
+  });
+  if (body) body.style.display = 'none';
+}
+
+function updateAdvPanel(s) {
+  if (!advPanelOpen || !sessionActive) return;
+
+  const aiCalls = document.getElementById('advAiCalls');
+  const aiBar = document.getElementById('advAiBar');
+  const aiStatus = document.getElementById('advAiStatus');
+  const cpuEl = document.getElementById('advCpu');
+  const cpuBar = document.getElementById('advCpuBar');
+  const memEl = document.getElementById('advMemory');
+
+  const llmCalls = s.llm_calls || 0;
+  const maxCalls = Math.max(llmCalls, 20);
+  if (aiCalls) aiCalls.textContent = llmCalls;
+  if (aiBar) aiBar.style.width = `${Math.min(100, (llmCalls / maxCalls) * 100)}%`;
+  if (aiStatus) aiStatus.textContent = llmCalls > 0 ? 'Gemma 4B active' : 'Idle — rule engine only';
+
+  const cpu = s.cpu_usage || 0;
+  const mem = s.memory_mb || 0;
+  if (cpuEl) cpuEl.textContent = `${cpu.toFixed(1)}%`;
+  if (cpuBar) cpuBar.style.width = `${Math.min(100, cpu)}%`;
+  if (memEl) memEl.textContent = `${mem.toFixed(0)} MB`;
 }
 
 // ─── Init on load ────────────────────────────────────────────────────
