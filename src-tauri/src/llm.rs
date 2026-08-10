@@ -12,6 +12,7 @@ use std::time::Duration;
 const OLLAMA_HOST: &str = "127.0.0.1:11434";
 const MODEL: &str = "gemma:e4b";
 const TIMEOUT: Duration = Duration::from_secs(4);
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LlmVerdict {
@@ -45,7 +46,7 @@ pub fn classify_ambiguous(
         &OLLAMA_HOST.parse().ok()?,
         TIMEOUT,
     ).ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(10))).ok()?;
+    stream.set_read_timeout(Some(READ_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(TIMEOUT)).ok()?;
 
     let request = format!(
@@ -150,6 +151,8 @@ pub fn validate_goal(goal: &str, description: &str) -> bool {
         Ok(s) => s,
         Err(_) => return true,
     };
+    let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(TIMEOUT));
 
     let request = format!(
         "POST /api/generate HTTP/1.1\r\n\

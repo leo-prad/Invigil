@@ -40,6 +40,9 @@ pub fn classify_tier0(window: &WindowInfo, profile: &Profile) -> (Classification
     let system_work = [
         "overleaf", "desmos", "notion", "obsidian", "anki",
         "latex", "texstudio", "texmaker", "zotero",
+        "antigravity", "code", "visual studio", "cursor",
+        "pycharm", "intellij", "sublime", "canvas", "blackboard",
+        "chatgpt", "claude", "github", "stack overflow",
     ];
     for app in &system_work {
         if title_lower.contains(app) || process_lower.contains(app) {
