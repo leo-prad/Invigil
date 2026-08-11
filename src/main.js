@@ -24,6 +24,7 @@ let liveData = null;     // DashboardData from backend
 let sessionActive = false;
 let timerInterval = null;
 let elapsedSec = 0;
+let currentGoal = '';    // kept in sync from session-tick-result, used by the drift overlay
 let prevElapsedText = '';
 let prevLeafTimeText = '--:--';
 const state = { mode: 'overall', start: null, end: null };
@@ -44,8 +45,10 @@ async function init() {
     document.body.classList.add('overlay-mode');
     document.querySelector('.page-wrap')?.remove();
     document.getElementById('leafLetoutCard')?.remove();
-    const cyber = document.getElementById('cyberOverlay');
-    if (cyber) cyber.style.display = 'flex';
+    // Do NOT force #cyberOverlay visible here — it stays at its default display:none
+    // until a real drift-detected event fills it in and shows it. Forcing it on at
+    // load meant the static placeholder markup was what got shown if that event was
+    // ever missed, which read as "the app is showing hardcoded fake data."
     setupListeners();
     return;
   }
@@ -914,18 +917,50 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
 
 const cyberOverlay = document.getElementById('cyberOverlay');
 const cyberContent = document.getElementById('cyberContent');
+const cyberHero = document.getElementById('cyberHero');
+const cyberSub = document.getElementById('cyberSub');
 
-function showCyberOverlay(app, detail, elapsedSec) {
+// Cynical/mean roast lines for the drift overlay's hero text — picked fresh each time
+// the overlay is (re)shown, so it doesn't read as a single hardcoded slogan.
+const CYBER_ROAST_LINES = [
+  app => `SERIOUSLY? ${(app || 'THIS').toUpperCase()}?`,
+  () => `PATHETIC. GET BACK TO WORK.`,
+  app => `${(app || 'THAT').toUpperCase()} ISN'T YOUR JOB.`,
+  () => `WOW. GREAT COMMITMENT TO FAILING.`,
+  app => `YOU CHOSE ${(app || 'THIS').toUpperCase()} OVER YOUR OWN FUTURE.`,
+  () => `THIS IS EMBARRASSING TO WATCH.`,
+  app => `${(app || 'IT').toUpperCase()} CAN WAIT. YOUR DEADLINE CAN'T.`,
+  () => `STOP LYING TO YOURSELF.`,
+  () => `NOBODY IS COMING TO SAVE YOUR GRADE.`,
+  app => `${(app || 'THIS')} AGAIN? REALLY?`,
+];
+let lastRoastIdx = -1;
+
+function pickRoastLine(app) {
+  let idx = Math.floor(Math.random() * CYBER_ROAST_LINES.length);
+  if (CYBER_ROAST_LINES.length > 1 && idx === lastRoastIdx) {
+    idx = (idx + 1) % CYBER_ROAST_LINES.length;
+  }
+  lastRoastIdx = idx;
+  return CYBER_ROAST_LINES[idx](app);
+}
+
+function showCyberOverlay(app, detail, elapsedSec, goal) {
   cyberOverlay.style.display = 'flex';
   cyberContent.classList.remove('shake');
   void cyberContent.offsetWidth;
   cyberContent.classList.add('shake');
 
-  // Update the overlay text
-  const subEl = cyberOverlay.querySelector('.cyber-sub');
-  if (subEl) {
-    const away = elapsedSec ? `${Math.floor(elapsedSec / 60)}m away` : '';
-    subEl.innerHTML = `${app || 'Unknown'} — <em>${detail || ''}</em> ${away ? '· ' + away : ''}`;
+  if (cyberHero) {
+    const line = pickRoastLine(app);
+    cyberHero.textContent = line;
+    cyberHero.setAttribute('data-text', line);
+  }
+
+  if (cyberSub) {
+    const away = elapsedSec ? `${Math.floor(elapsedSec / 60)}m off-task` : '';
+    const goalPart = goal ? ` — you said you'd be doing <em>${goal}</em>` : '';
+    cyberSub.innerHTML = `${app || 'Unknown app'} — <em>${detail || 'unknown'}</em>${away ? ' · ' + away : ''}${goalPart}`;
   }
 }
 
@@ -934,7 +969,7 @@ function hideCyberOverlay() {
   try { invoke('hide_drift_overlay'); } catch(e) {}
 }
 
-demoDriftBtn.addEventListener('click', () => showCyberOverlay('Discord', '#general', 47));
+demoDriftBtn.addEventListener('click', () => showCyberOverlay('Discord', '#general', 47, 'Calc HW'));
 document.getElementById('cyberWorkBtn').addEventListener('click', async () => {
   hideCyberOverlay();
   try { await invoke('correct_classification', { newStatus: 'on_task' }); } catch(e) {}
@@ -1453,6 +1488,7 @@ async function setupListeners() {
     if (result?.state) {
       applySessionState(result.state);
       elapsedSec = result.state.elapsed_sec;
+      currentGoal = result.state.goal || '';
       renderSessionTimeline();
       renderSessionActivity();
       updateAdvPanel(result.state);
@@ -1468,7 +1504,7 @@ async function setupListeners() {
   await listen('drift-detected', async (event) => {
     if (window.location.hash !== '#overlay-drift') return;
     const { app, detail, elapsed_sec } = event.payload;
-    showCyberOverlay(app, detail, elapsed_sec);
+    showCyberOverlay(app, detail, elapsed_sec, currentGoal);
     try {
       if (window.__TAURI__?.window) {
         const win = window.__TAURI__.window.getCurrentWindow();

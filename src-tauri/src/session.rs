@@ -9,6 +9,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
+// Seconds to suppress the drift overlay after the user dismisses it, so long as they
+// stay on the same continuous off-task streak. A fresh streak (any on_task in between)
+// resets this to 0, so a brand-new distraction still nags immediately.
+const OVERLAY_COOLDOWN_SEC: i64 = 30;
+
 // ─── Session state ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +36,7 @@ pub struct SessionState {
     pub deep_focus_sec: i64,        // longest unbroken on-task streak
     pub current_streak_sec: i64,    // current unbroken on-task run
     pub grace_remaining_sec: i64,   // countdown before flagging off-task
+    pub overlay_cooldown_sec: i64,  // countdown before re-nagging after a dismiss
     pub is_idle: bool,
     pub llm_calls: i64,
     pub cpu_usage: f64,
@@ -59,6 +65,7 @@ impl Default for SessionState {
             deep_focus_sec: 0,
             current_streak_sec: 0,
             grace_remaining_sec: 0,
+            overlay_cooldown_sec: 0,
             is_idle: false,
             llm_calls: 0,
             cpu_usage: 0.0,
@@ -267,6 +274,17 @@ impl SessionManager {
         s.session_allowlist.insert(app.to_lowercase());
     }
 
+    /// Called when the user dismisses the drift overlay (either button). Suppresses
+    /// re-showing it for OVERLAY_COOLDOWN_SEC as long as the same off-task streak
+    /// continues — see the cooldown handling in `tick()`.
+    pub fn snooze_drift(&self) {
+        let mut s = self.state.lock();
+        if !s.active {
+            return;
+        }
+        s.overlay_cooldown_sec = OVERLAY_COOLDOWN_SEC;
+    }
+
     /// Called every 5 seconds during an active session.
     pub fn tick(&self) -> Option<TickResult> {
         // Extract goal, description and check active state without holding the lock during network operations
@@ -427,6 +445,7 @@ impl SessionManager {
             state.current_status = "on_task".into();
             state.current_streak_sec += delta;
             state.grace_remaining_sec = 0;
+            state.overlay_cooldown_sec = 0;
 
             if state.current_streak_sec > state.deep_focus_sec {
                 state.deep_focus_sec = state.current_streak_sec;
@@ -439,6 +458,15 @@ impl SessionManager {
             state.drift_count += 1;
             drift_triggered = true;
         }
+
+        // Dismissing the overlay (see snooze_drift) suppresses re-showing it for
+        // OVERLAY_COOLDOWN_SEC even though the underlying classification hasn't changed —
+        // without this, a dismissal accomplishes nothing as long as the same distracting
+        // window stays focused, since the next tick just reclassifies off_task again.
+        if state.current_status == "off_task" && state.overlay_cooldown_sec > 0 {
+            state.overlay_cooldown_sec -= delta;
+        }
+        let overlay_active = state.current_status == "off_task" && state.overlay_cooldown_sec <= 0;
 
         *self.last_raw_status.lock() = status.to_string();
 
@@ -486,7 +514,7 @@ impl SessionManager {
         let result = TickResult {
             state: state.clone(),
             drift_triggered,
-            overlay_active: state.current_status == "off_task",
+            overlay_active,
             drift_app: app_name,
             drift_detail: detail,
             session_expired,

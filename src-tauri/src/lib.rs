@@ -106,7 +106,8 @@ fn end_session(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<sess
 }
 
 #[tauri::command]
-fn hide_drift_overlay(app: AppHandle) -> Result<(), String> {
+fn hide_drift_overlay(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.session_mgr.snooze_drift();
     if let Some(drift_win) = app.get_webview_window("drift_overlay") {
         let _ = drift_win.hide();
     }
