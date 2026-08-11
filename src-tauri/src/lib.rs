@@ -9,7 +9,11 @@ use db::Database;
 use parking_lot::Mutex;
 use session::SessionManager;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    WindowEvent,
+};
 
 // ─── App state ───────────────────────────────────────────────────────
 
@@ -355,7 +359,35 @@ pub fn run() {
                 let _ = window.set_focus();
             }
 
+            // Build system tray icon with click-to-restore
+            let app_handle = app.handle().clone();
+            TrayIconBuilder::new()
+                .tooltip("Invigil — Focus Daemon")
+                .icon(app.default_window_icon().cloned().unwrap())
+                .on_tray_icon_event(move |_tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        if let Some(win) = app_handle.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.unminimize();
+                            let _ = win.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { .. } = event {
+                    window.app_handle().exit(0);
+                }
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
