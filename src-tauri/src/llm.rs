@@ -115,6 +115,22 @@ pub fn validate_goal(goal: &str, description: &str) -> String {
         return "Description must be at least 25 characters.".into();
     }
 
+    // Content moderation — reject inappropriate/illegal content
+    let blocked = [
+        "meth", "cocaine", "heroin", "fentanyl", "crack", "ecstasy", "mdma",
+        "lsd", "ketamine", "pcp", "opioid", "amphetamine", "xanax", "molly",
+        "weed", "marijuana", "shrooms", "mushrooms", "dmt", "opium",
+        "fuck", "shit", "bitch", "dick", "porn", "hentai", "nsfw",
+        "kill", "murder", "suicide", "bomb", "terrorism",
+    ];
+    let combined_lower = format!("{} {}", clean_goal, clean_desc).to_lowercase();
+    let combined_words: Vec<&str> = combined_lower.split(|c: char| !c.is_alphanumeric()).collect();
+    for word in &combined_words {
+        if blocked.contains(word) {
+            return "That doesn't look like a real study or work task.".into();
+        }
+    }
+
     // Quick heuristic check for keyboard spam
     let chars: Vec<char> = clean_desc.chars().collect();
     let all_same = chars.iter().all(|&c| c == chars[0]);

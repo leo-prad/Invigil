@@ -32,6 +32,9 @@ pub struct SessionState {
     pub current_streak_sec: i64,    // current unbroken on-task run
     pub grace_remaining_sec: i64,   // countdown before flagging off-task
     pub is_idle: bool,
+    pub llm_calls: i64,
+    pub cpu_usage: f64,
+    pub memory_mb: f64,
     pub session_allowlist: HashSet<String>,
 }
 
@@ -57,6 +60,9 @@ impl Default for SessionState {
             current_streak_sec: 0,
             grace_remaining_sec: 0,
             is_idle: false,
+            llm_calls: 0,
+            cpu_usage: 0.0,
+            memory_mb: 0.0,
             session_allowlist: HashSet::new(),
         }
     }
@@ -104,12 +110,17 @@ pub struct SessionManager {
     // Track the last interval so we can close it when window or status changes
     last_interval_id: Arc<Mutex<Option<String>>>,
     last_status: Arc<Mutex<String>>,
+    // Raw (grace-unmasked) classification from the previous tick — drives the grace countdown.
+    last_raw_status: Arc<Mutex<String>>,
     last_category: Arc<Mutex<String>>,
     last_window_title: Arc<Mutex<String>>,
     // Tier 1 LLM availability (checked once at start)
     ollama_available: Arc<Mutex<bool>>,
     // Wall-clock timestamp of the last tick (for accurate elapsed time)
     last_tick_at: Arc<Mutex<Option<chrono::DateTime<Utc>>>>,
+    // CPU tracking: previous kernel+user time (100-ns units) and wall instant
+    #[cfg(windows)]
+    last_cpu_time: Arc<Mutex<Option<(u64, std::time::Instant)>>>,
 }
 
 impl SessionManager {
@@ -130,10 +141,13 @@ impl SessionManager {
             idle_counter: Arc::new(Mutex::new(0)),
             last_interval_id: Arc::new(Mutex::new(None)),
             last_status: Arc::new(Mutex::new(String::new())),
+            last_raw_status: Arc::new(Mutex::new(String::new())),
             last_category: Arc::new(Mutex::new(String::new())),
             last_window_title: Arc::new(Mutex::new(String::new())),
             ollama_available: Arc::new(Mutex::new(ollama_up)),
             last_tick_at: Arc::new(Mutex::new(None)),
+            #[cfg(windows)]
+            last_cpu_time: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -172,6 +186,7 @@ impl SessionManager {
         *self.state.lock() = new_state.clone();
         *self.last_interval_id.lock() = None;
         *self.last_status.lock() = String::new();
+        *self.last_raw_status.lock() = String::new();
         *self.last_category.lock() = String::new();
         *self.last_window_title.lock() = String::new();
         *self.idle_counter.lock() = 0;
@@ -280,36 +295,24 @@ impl SessionManager {
                 || window.process_name.to_lowercase().contains("invigil")
         };
 
+        let mut used_llm = false;
         let status = if is_session_allowed {
             "on_task"
-        } else if !profile.allow_patterns.is_empty() {
-            // User explicitly specified tools for this session.
-            let title_lower = window.title.to_lowercase();
-            let proc_lower = window.process_name.to_lowercase();
-            let matches_allow = profile.allow_patterns.iter().any(|pat| {
-                let p = pat.to_lowercase();
-                title_lower.contains(&p) || proc_lower.contains(&p)
-            });
-
-            if matches_allow {
-                "on_task"
-            } else {
-                "off_task"
-            }
         } else {
             match classification {
-                Classification::OnTask => "on_task",
                 Classification::OffTask => "off_task",
+                Classification::OnTask => "on_task",
                 Classification::Ambiguous => {
                     let ollama_up = *self.ollama_available.lock();
                     if ollama_up {
+                        used_llm = true;
                         match llm::classify_ambiguous(&goal, &description, &app_name, &window.title) {
                             Some(llm::LlmVerdict::OnTask) => "on_task",
                             Some(llm::LlmVerdict::OffTask) => "off_task",
-                            None => "on_task",
+                            None => evaluate_relevance_heuristic(&goal, &description, &app_name, &window.title),
                         }
                     } else {
-                        "on_task"
+                        evaluate_relevance_heuristic(&goal, &description, &app_name, &window.title)
                     }
                 }
             }
@@ -338,6 +341,48 @@ impl SessionManager {
         state.is_idle = is_currently_idle;
         state.elapsed_sec += delta;
         state.current_app = app_name.clone();
+
+        // Update telemetry counters
+        if used_llm {
+            state.llm_calls += 1;
+        }
+        // Process memory + CPU via Win32
+        #[cfg(windows)]
+        {
+            use windows::Win32::Foundation::FILETIME;
+            use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+            use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+            unsafe {
+                let proc = GetCurrentProcess();
+
+                // Memory
+                let mut pmc = PROCESS_MEMORY_COUNTERS::default();
+                pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+                if GetProcessMemoryInfo(proc, &mut pmc, pmc.cb).is_ok() {
+                    state.memory_mb = pmc.WorkingSetSize as f64 / (1024.0 * 1024.0);
+                }
+
+                // CPU — compare kernel+user time delta to wall-clock delta
+                let mut creation = FILETIME::default();
+                let mut exit = FILETIME::default();
+                let mut kernel = FILETIME::default();
+                let mut user = FILETIME::default();
+                if GetProcessTimes(proc, &mut creation, &mut exit, &mut kernel, &mut user).is_ok() {
+                    let ft_to_u64 = |ft: FILETIME| (ft.dwHighDateTime as u64) << 32 | ft.dwLowDateTime as u64;
+                    let cpu_time = ft_to_u64(kernel) + ft_to_u64(user);
+                    let now_wall = std::time::Instant::now();
+                    let mut prev = self.last_cpu_time.lock();
+                    if let Some((prev_cpu, prev_wall)) = *prev {
+                        let cpu_delta = cpu_time.saturating_sub(prev_cpu) as f64;
+                        let wall_delta = now_wall.duration_since(prev_wall).as_secs_f64() * 10_000_000.0;
+                        if wall_delta > 0.0 {
+                            state.cpu_usage = (cpu_delta / wall_delta * 100.0).min(100.0);
+                        }
+                    }
+                    *prev = Some((cpu_time, now_wall));
+                }
+            }
+        }
         let mut final_detail = detail.clone();
         if is_currently_idle {
             final_detail = format!("(Away from controls) {}", detail);
@@ -346,12 +391,18 @@ impl SessionManager {
         }
         state.current_detail = final_detail;
 
-        // Grace period logic
+        // Grace period logic.
+        //
+        // `prev_raw_status` is the *unmasked* classification from the previous tick (tracked
+        // separately below), not the grace-masked effective status — otherwise the countdown
+        // resets to full every tick for as long as grace keeps reporting "on_task", and grace
+        // never actually expires. See wiki/concepts/distraction-detection.md for the history.
         let mut drift_triggered = false;
-        let prev_status = self.last_status.lock().clone();
+        let prev_raw_status = self.last_raw_status.lock().clone();
+        let prev_effective_status = self.last_status.lock().clone();
 
         if status == "off_task" {
-            if prev_status != "off_task" {
+            if prev_raw_status != "off_task" {
                 // Just started drifting — begin grace period
                 state.grace_remaining_sec = self.grace_period_sec;
             } else if state.grace_remaining_sec > 0 {
@@ -363,12 +414,6 @@ impl SessionManager {
                 state.off_task_sec += delta;
                 state.current_status = "off_task".into();
                 state.current_streak_sec = 0;
-
-                if prev_status != "off_task" || state.grace_remaining_sec == 0 - delta {
-                    // First tick after grace expiry — trigger overlay
-                    state.drift_count += 1;
-                    drift_triggered = true;
-                }
             } else {
                 // Still in grace period — count as on-task
                 state.on_task_sec += delta;
@@ -386,6 +431,15 @@ impl SessionManager {
                 state.deep_focus_sec = state.current_streak_sec;
             }
         }
+
+        // Fire the overlay/penalty exactly once per drift streak: the tick where the
+        // *effective* status flips from on_task to off_task.
+        if state.current_status == "off_task" && prev_effective_status != "off_task" {
+            state.drift_count += 1;
+            drift_triggered = true;
+        }
+
+        *self.last_raw_status.lock() = status.to_string();
 
         // Record interval change if status, category, or window title changed
         let effective_status = state.current_status.clone();
@@ -497,7 +551,7 @@ impl Default for crate::db::Settings {
     fn default() -> Self {
         Self {
             idle_timeout_sec: 45,
-            grace_period_sec: 15,
+            grace_period_sec: 0,
             sensitivity: 3,
             quiet_hours_start: None,
             quiet_hours_end: None,
@@ -526,6 +580,46 @@ fn calculate_points(on_task_min: i64, drift_count: i64, db: &Database) -> PointB
         base_points: base,
         drift_penalty: penalty,
         streak_multiplier: streak,
-        total: total.max(0), // never negative
+        total: total.max(0), // Never negative
+    }
+}
+
+/// Fallback relevance evaluation when local LLM is unpowered or unreachable.
+/// Compares window title and app name against goal & description keywords
+/// using whole-word matching to avoid false positives.
+fn evaluate_relevance_heuristic(goal: &str, description: &str, app_name: &str, window_title: &str) -> &'static str {
+    let combined_target = format!("{} {}", goal, description).to_lowercase();
+    let window_lower = format!("{} {}", app_name, window_title).to_lowercase();
+
+    let stop_words = [
+        "the", "and", "for", "with", "this", "that", "from", "studying", "doing",
+        "work", "task", "session", "about", "going", "will", "have", "some", "more",
+        "solve", "study", "just", "need", "want", "make", "like", "using", "used",
+        "try", "trying", "practice", "learn", "learning", "working", "getting",
+        "problems", "problem", "questions", "question", "exercises", "exercise",
+    ];
+    let goal_keywords: Vec<&str> = combined_target
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|w| w.len() >= 4 && !stop_words.contains(w))
+        .collect();
+
+    if goal_keywords.is_empty() {
+        return "off_task";
+    }
+
+    let window_words: Vec<&str> = window_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    let matches_goal = goal_keywords.iter().any(|kw| {
+        window_words.iter().any(|ww| *ww == *kw)
+    });
+
+    if matches_goal {
+        "on_task"
+    } else {
+        "off_task"
     }
 }

@@ -223,7 +223,7 @@ impl Database {
         // Default settings
         let defaults = vec![
             ("idle_timeout_sec", "45"),
-            ("grace_period_sec", "15"),
+            ("grace_period_sec", "0"),
             ("sensitivity", "3"),
             ("tier1_enabled", "true"),
             ("tier2_enabled", "false"),
@@ -590,7 +590,7 @@ impl Database {
     pub fn get_all_settings(&self) -> SqlResult<Settings> {
         Ok(Settings {
             idle_timeout_sec: self.get_setting("idle_timeout_sec").unwrap_or("45".into()).parse().unwrap_or(45),
-            grace_period_sec: self.get_setting("grace_period_sec").unwrap_or("15".into()).parse().unwrap_or(15),
+            grace_period_sec: self.get_setting("grace_period_sec").unwrap_or("0".into()).parse().unwrap_or(0),
             sensitivity: self.get_setting("sensitivity").unwrap_or("3".into()).parse().unwrap_or(3),
             quiet_hours_start: self.get_setting("quiet_hours_start").ok(),
             quiet_hours_end: self.get_setting("quiet_hours_end").ok(),
