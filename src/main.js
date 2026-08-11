@@ -1459,8 +1459,14 @@ async function setupListeners() {
     }
   });
 
-  // Drift detected — show cyberpunk overlay over entire desktop
+  // Drift detected — show cyberpunk overlay over entire desktop.
+  // This event is broadcast app-wide, so both the main window and the dedicated
+  // drift_overlay window receive it. Only the overlay window should actually render
+  // it — otherwise the main window's own #cyberOverlay gets set to display:flex and
+  // never hidden again (its dismiss buttons live in the *other* window's DOM), leaving
+  // an invisible full-window click-blocker over the dashboard forever.
   await listen('drift-detected', async (event) => {
+    if (window.location.hash !== '#overlay-drift') return;
     const { app, detail, elapsed_sec } = event.payload;
     showCyberOverlay(app, detail, elapsed_sec);
     try {
