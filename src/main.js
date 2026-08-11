@@ -25,6 +25,7 @@ let sessionActive = false;
 let timerInterval = null;
 let elapsedSec = 0;
 let currentGoal = '';    // kept in sync from session-tick-result, used by the drift overlay
+let currentDriftApp = ''; // most recent drift app; used by "This is actually work" to allowlist it
 let prevElapsedText = '';
 let prevLeafTimeText = '--:--';
 const state = { mode: 'overall', start: null, end: null };
@@ -49,7 +50,7 @@ async function init() {
     // until a real drift-detected event fills it in and shows it. Forcing it on at
     // load meant the static placeholder markup was what got shown if that event was
     // ever missed, which read as "the app is showing hardcoded fake data."
-    setupListeners();
+    setupOverlayListeners();
     return;
   }
 
@@ -946,6 +947,7 @@ function pickRoastLine(app) {
 }
 
 function showCyberOverlay(app, detail, elapsedSec, goal) {
+  currentDriftApp = app || '';
   cyberOverlay.style.display = 'flex';
   cyberContent.classList.remove('shake');
   void cyberContent.offsetWidth;
@@ -973,6 +975,12 @@ demoDriftBtn.addEventListener('click', () => showCyberOverlay('Discord', '#gener
 document.getElementById('cyberWorkBtn').addEventListener('click', async () => {
   hideCyberOverlay();
   try { await invoke('correct_classification', { newStatus: 'on_task' }); } catch(e) {}
+  // Also allowlist the app for the rest of this session — otherwise the classifier
+  // keeps flagging the same window and the overlay re-appears after the 30s cooldown,
+  // which reads as "the button didn't do anything."
+  if (currentDriftApp) {
+    try { await invoke('allow_app_this_session', { app: currentDriftApp }); } catch(e) {}
+  }
 });
 document.getElementById('cyberBackBtn').addEventListener('click', () => {
   hideCyberOverlay();
@@ -1495,26 +1503,6 @@ async function setupListeners() {
     }
   });
 
-  // Drift detected — show cyberpunk overlay over entire desktop.
-  // This event is broadcast app-wide, so both the main window and the dedicated
-  // drift_overlay window receive it. Only the overlay window should actually render
-  // it — otherwise the main window's own #cyberOverlay gets set to display:flex and
-  // never hidden again (its dismiss buttons live in the *other* window's DOM), leaving
-  // an invisible full-window click-blocker over the dashboard forever.
-  await listen('drift-detected', async (event) => {
-    if (window.location.hash !== '#overlay-drift') return;
-    const { app, detail, elapsed_sec } = event.payload;
-    showCyberOverlay(app, detail, elapsed_sec, currentGoal);
-    try {
-      if (window.__TAURI__?.window) {
-        const win = window.__TAURI__.window.getCurrentWindow();
-        await win.setAlwaysOnTop(true);
-        await win.show();
-        await win.setFocus();
-      }
-    } catch(e) {}
-  });
-
   // Session timer expired
   await listen('session-expired', async () => {
     try {
@@ -1543,6 +1531,32 @@ async function setupListeners() {
       }
     });
   }
+}
+
+// Listeners for the dedicated drift_overlay window. Kept separate from setupListeners()
+// because the overlay window strips out .page-wrap on load, so applySessionState() would
+// crash on the many DOM elements that no longer exist. Only what the overlay actually
+// needs is registered here.
+async function setupOverlayListeners() {
+  // Track the current session goal so the overlay's sub-line can say "you said you'd
+  // be doing <goal>". Cheap: just pulls the string, no DOM touching.
+  await listen('session-tick-result', (event) => {
+    const s = event.payload?.state;
+    if (s) currentGoal = s.goal || '';
+  });
+
+  await listen('drift-detected', async (event) => {
+    const { app, detail, elapsed_sec } = event.payload;
+    showCyberOverlay(app, detail, elapsed_sec, currentGoal);
+    try {
+      if (window.__TAURI__?.window) {
+        const win = window.__TAURI__.window.getCurrentWindow();
+        await win.setAlwaysOnTop(true);
+        await win.show();
+        await win.setFocus();
+      }
+    } catch(e) {}
+  });
 }
 
 // ─── Count-up animation ──────────────────────────────────────────────
