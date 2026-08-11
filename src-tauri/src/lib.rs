@@ -56,7 +56,10 @@ fn start_session(
             if let Some(result) = app_state.session_mgr.tick() {
                 let _ = app_clone.emit("session-tick-result", &result);
 
-                if result.drift_triggered {
+                if result.overlay_active {
+                    // Re-shown/re-focused every off-task tick, not just the first — dismissing the
+                    // overlay ("I'll get back to work") without actually switching away brings it
+                    // right back on the next ~5s poll instead of going quiet for the rest of the drift.
                     if let Some(drift_win) = app_clone.get_webview_window("drift_overlay") {
                         // Size overlay to cover the entire monitor
                         if let Ok(Some(monitor)) = drift_win.current_monitor() {

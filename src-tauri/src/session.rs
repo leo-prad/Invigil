@@ -71,7 +71,8 @@ impl Default for SessionState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TickResult {
     pub state: SessionState,
-    pub drift_triggered: bool,   // true = just entered off-task, show overlay
+    pub drift_triggered: bool,   // true = just entered off-task this tick (counts toward drift_count)
+    pub overlay_active: bool,    // true = still off-task right now — keep the overlay up/re-shown
     pub drift_app: String,
     pub drift_detail: String,
     pub session_expired: bool,   // true = timer ran out
@@ -485,6 +486,7 @@ impl SessionManager {
         let result = TickResult {
             state: state.clone(),
             drift_triggered,
+            overlay_active: state.current_status == "off_task",
             drift_app: app_name,
             drift_detail: detail,
             session_expired,
