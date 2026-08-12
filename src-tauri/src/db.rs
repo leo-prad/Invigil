@@ -49,6 +49,8 @@ pub struct Correction {
     pub original_status: String,
     pub corrected_status: String,
     pub timestamp: String,
+    // Free-text user reason from the "this is actually work" flow. None for silent overrides.
+    pub justification: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,6 +216,11 @@ impl Database {
         if !has_desc {
             let _ = conn.execute("ALTER TABLE sessions ADD COLUMN description TEXT NOT NULL DEFAULT ''", params![]);
         }
+        // Nullable justification column for the "this is actually work" flow.
+        let has_just = conn.prepare("SELECT justification FROM corrections LIMIT 1").is_ok();
+        if !has_just {
+            let _ = conn.execute("ALTER TABLE corrections ADD COLUMN justification TEXT", params![]);
+        }
         Ok(())
     }
 
@@ -223,7 +230,7 @@ impl Database {
         // Default settings
         let defaults = vec![
             ("idle_timeout_sec", "45"),
-            ("grace_period_sec", "15"),
+            ("grace_period_sec", "0"),
             ("sensitivity", "3"),
             ("tier1_enabled", "true"),
             ("tier2_enabled", "false"),
@@ -496,9 +503,9 @@ impl Database {
     pub fn insert_correction(&self, correction: &Correction) -> SqlResult<()> {
         let conn = self.conn.lock();
         conn.execute(
-            "INSERT INTO corrections (id, interval_id, original_status, corrected_status, timestamp)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![correction.id, correction.interval_id, correction.original_status, correction.corrected_status, correction.timestamp],
+            "INSERT INTO corrections (id, interval_id, original_status, corrected_status, timestamp, justification)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![correction.id, correction.interval_id, correction.original_status, correction.corrected_status, correction.timestamp, correction.justification],
         )?;
         // Also update the interval itself
         conn.execute(
@@ -590,7 +597,7 @@ impl Database {
     pub fn get_all_settings(&self) -> SqlResult<Settings> {
         Ok(Settings {
             idle_timeout_sec: self.get_setting("idle_timeout_sec").unwrap_or("45".into()).parse().unwrap_or(45),
-            grace_period_sec: self.get_setting("grace_period_sec").unwrap_or("15".into()).parse().unwrap_or(15),
+            grace_period_sec: self.get_setting("grace_period_sec").unwrap_or("0".into()).parse().unwrap_or(0),
             sensitivity: self.get_setting("sensitivity").unwrap_or("3".into()).parse().unwrap_or(3),
             quiet_hours_start: self.get_setting("quiet_hours_start").ok(),
             quiet_hours_end: self.get_setting("quiet_hours_end").ok(),

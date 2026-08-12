@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/capability",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for the main and drift-overlay windows",
+  "windows": ["main", "drift_overlay"],
   "permissions": [
     "core:default",
     "core:event:default",
