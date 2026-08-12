@@ -7,6 +7,17 @@
 const { invoke } = window.__TAURI__.core;
 const { listen, emit } = window.__TAURI__.event;
 
+// Desktop app, not a webpage — kill the WebView's default right-click menu ("Refresh",
+// "Save as", "Print" via WebView2), and let the browser drag start image/link previews
+// nowhere. Text inputs are exempt so the user can still right-click paste into the
+// justification textarea.
+window.addEventListener('contextmenu', (e) => {
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  e.preventDefault();
+});
+window.addEventListener('dragstart', (e) => e.preventDefault());
+
 // ─── Data (demo fallback until real sessions exist) ──────────────────
 
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -450,18 +461,51 @@ function smoothPath(points) {
 const ENERGY_BOLT = '<path d="M13 2 3 14h6l-1 8 10-12h-6l1-8Z" fill="var(--peak-line)"/>';
 
 function renderLineChart(viz, labels, values, xlabels) {
-  const W = 600, H = 150, PAD_L = 4, PAD_R = 4, PAD_T = 10, PAD_B = 10;
-  const maxV = Math.max(...values, 1);
+  // Wider left padding to fit y-axis tick labels ("100", "-102" etc). Top and bottom pad
+  // are non-zero so the curve doesn't clip against the frame or the value dot.
+  const W = 600, H = 150, PAD_L = 44, PAD_R = 10, PAD_T = 14, PAD_B = 14;
   const n = values.length;
   if (n === 0) { viz.innerHTML = '<div class="empty-state">No data yet.</div>'; labels.innerHTML = ''; return; }
+
+  // Domain: always include 0 so negative streaks show against a clear baseline. When all
+  // values are 0 the y-mapping would divide by 0 — collapse to a symmetric ±1 span.
+  const rawMax = Math.max(...values);
+  const rawMin = Math.min(...values);
+  let dMax = Math.max(rawMax, 0);
+  let dMin = Math.min(rawMin, 0);
+  if (dMax === dMin) { dMax = 1; dMin = -1; }
+  // A little headroom/floor so the curve peak/trough doesn't kiss the frame.
+  const padSpan = (dMax - dMin) * 0.08;
+  dMax += padSpan; dMin -= padSpan;
+
   const step = (W - PAD_L - PAD_R) / (n - 1 || 1);
-  const y = v => PAD_T + (1 - v / maxV) * (H - PAD_T - PAD_B);
+  const y = v => PAD_T + (1 - (v - dMin) / (dMax - dMin)) * (H - PAD_T - PAD_B);
   const pts = values.map((v, i) => [PAD_L + i * step, y(v)]);
   const curve = smoothPath(pts);
-  const areaPath = curve + ` L${pts[pts.length-1][0].toFixed(1)},${H} L${pts[0][0].toFixed(1)},${H} Z`;
+  const baselineY = y(0);   // where "0" sits on the y-axis
+  // Area fills between curve and 0-baseline — positive segments fill down, negative up.
+  const areaPath = curve
+    + ` L${pts[pts.length-1][0].toFixed(1)},${baselineY.toFixed(1)}`
+    + ` L${pts[0][0].toFixed(1)},${baselineY.toFixed(1)} Z`;
   const last = pts[pts.length - 1];
   const dotXPct = (last[0] / W) * 100;
   const dotYPct = (last[1] / H) * 100;
+
+  // Y-axis ticks: bottom (dMin approx), middle, top (dMax approx). Rounded to nice numbers.
+  const ticks = [
+    { v: dMax - padSpan, pos: y(dMax - padSpan) },
+    { v: (dMax + dMin) / 2, pos: y((dMax + dMin) / 2) },
+    { v: dMin + padSpan, pos: y(dMin + padSpan) },
+  ];
+  const yTicksSvg = ticks.map(t => `
+    <line x1="${PAD_L}" y1="${t.pos.toFixed(1)}" x2="${W}" y2="${t.pos.toFixed(1)}" stroke="var(--line)" stroke-dasharray="1 5"/>
+    <text x="${PAD_L - 6}" y="${(t.pos + 3.5).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--ink-muted)" font-family="var(--font-sans)">${Math.round(t.v)}</text>
+  `).join('');
+  // Zero line drawn a shade darker whenever the domain actually straddles zero.
+  const zeroLineSvg = (rawMin < 0 && rawMax > 0)
+    ? `<line x1="${PAD_L}" y1="${baselineY.toFixed(1)}" x2="${W}" y2="${baselineY.toFixed(1)}" stroke="var(--ink-muted)" stroke-opacity="0.35" stroke-width="1"/>`
+    : '';
+
   viz.innerHTML = `
     <svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
       <defs>
@@ -470,9 +514,8 @@ function renderLineChart(viz, labels, values, xlabels) {
           <stop offset="100%" stop-color="var(--moss)" stop-opacity="0"/>
         </linearGradient>
       </defs>
-      <line x1="0" y1="30" x2="${W}" y2="30" stroke="var(--line)" stroke-dasharray="1 5"/>
-      <line x1="0" y1="75" x2="${W}" y2="75" stroke="var(--line)" stroke-dasharray="1 5"/>
-      <line x1="0" y1="120" x2="${W}" y2="120" stroke="var(--line)" stroke-dasharray="1 5"/>
+      ${yTicksSvg}
+      ${zeroLineSvg}
       <path d="${areaPath}" fill="url(#trendFill)"/>
       <path d="${curve}" fill="none" stroke="var(--moss-deep)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
     </svg>
@@ -482,6 +525,20 @@ function renderLineChart(viz, labels, values, xlabels) {
   labels.innerHTML = idxs.map(i => `<span>${xlabels[i]}</span>`).join('');
 }
 
+// Which stat the chart shows. User picks it in the trend card's dropdown; persists across
+// mode changes (single/range/overall) within the session so the picker feels sticky.
+let trendStat = 'focus_min';
+
+// One display name per stat — the trend card's title uses `label` too so it never disagrees
+// with the picker's selected option. (Old code had a distinct `overallTitle: 'Attention span'`
+// for focus_min, which read as a broken cross-reference against the picker's "Focus time".)
+const TREND_STAT_META = {
+  focus_min:   { label: 'Focus time',    get: d => d.total_minutes,          unit: 'min' },
+  on_task_pct: { label: 'On-task %',     get: d => Math.round(d.on_task_pct), unit: '%' },
+  sessions:    { label: 'Sessions/day',  get: d => d.session_count,          unit: '' },
+  points:      { label: 'Points/day',    get: d => d.points || 0,            unit: '' },
+};
+
 function renderTrend() {
   const viz = document.getElementById('trendViz');
   const labels = document.getElementById('trendLabels');
@@ -489,50 +546,57 @@ function renderTrend() {
   const num = document.getElementById('trendNum');
   const delta = document.getElementById('trendDelta');
   const sub = document.getElementById('trendSub');
+  const meta = TREND_STAT_META[trendStat] || TREND_STAT_META.focus_min;
 
-  if (state.mode === 'overall') {
-    title.textContent = 'Attention span';
-    if (liveData?.trend_14d?.length > 0) {
-      const trend = liveData.trend_14d;
-      const avg = Math.round(trend.reduce((s, t) => s + t.total_minutes, 0) / trend.length);
-      sub.textContent = `last ${trend.length} days · avg daily focus`;
-      num.innerHTML = `${avg}<span class="pct"> min</span>`;
-      delta.innerHTML = `<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 8l4-4 4 4"/></svg> trend`;
-      renderLineChart(viz, labels, trend.map(t => t.total_minutes), trend.map(t => fmtMonthDay(t.date)));
-    } else {
-      sub.textContent = 'no data yet — start a session';
-      num.innerHTML = '0<span class="pct"> min</span>';
-      delta.innerHTML = '';
-      viz.innerHTML = '<div class="empty-state">Complete sessions to see your trend.</div>';
-      labels.innerHTML = '';
-    }
-  } else if (state.mode === 'single') {
-    title.innerHTML = `<span style="font-family:var(--font-serif);font-style:italic;">${fmtMonthDay(state.start)}</span> · focus`;
-    sub.textContent = 'daily summary';
-    // Fetch day stats
-    invoke('get_day_stats', { date: state.start }).then(stats => {
-      num.innerHTML = `${stats.total_minutes}<span class="pct"> min total</span>`;
-      delta.innerHTML = `${stats.session_count} session${stats.session_count === 1 ? '' : 's'}`;
-    }).catch(() => {
-      num.innerHTML = '0<span class="pct"> min</span>';
-      delta.innerHTML = '';
-    });
-    viz.innerHTML = '';
+  // Overall base data: last 14 days. Range mode charts the range's slice; single mode
+  // shows a 7-day window centered on the picked date so the chart still makes sense.
+  const all = liveData?.trend_14d || [];
+  if (all.length === 0) {
+    title.textContent = meta.label;
+    sub.textContent = 'no data yet — start a session';
+    num.innerHTML = `0<span class="pct"> ${meta.unit}</span>`;
+    delta.innerHTML = '';
+    viz.innerHTML = '<div class="empty-state">Complete sessions to see your trend.</div>';
     labels.innerHTML = '';
-  } else if (state.mode === 'range') {
-    title.innerHTML = `${fmtMonthDay(state.start)} — ${fmtMonthDay(state.end)}`;
-    invoke('get_sessions_in_range', { start: state.start, end: state.end }).then(sessions => {
-      const total = sessions.reduce((s, x) => s + (x.duration_min || 0), 0);
-      const days = dateRange(state.start, state.end);
-      sub.textContent = `${days.length} days · ${sessions.length} sessions`;
-      num.innerHTML = `${Math.floor(total/60)}h<span class="pct"> ${total%60}m total</span>`;
-      delta.innerHTML = `${Math.round(total/days.length)} min/day avg`;
-    }).catch(() => {
-      num.innerHTML = '0<span class="pct"> min</span>';
-    });
-    viz.innerHTML = '';
-    labels.innerHTML = '';
+    return;
   }
+
+  // Slice the 14-day series to what the current mode wants.
+  let series = all;
+  if (state.mode === 'single' && state.start) {
+    // 7 days ending on the picked day (or all we have, whichever is shorter).
+    const idx = all.findIndex(t => t.date === state.start);
+    if (idx >= 0) {
+      const from = Math.max(0, idx - 6);
+      series = all.slice(from, idx + 1);
+    }
+  } else if (state.mode === 'range' && state.start && state.end) {
+    series = all.filter(t => t.date >= state.start && t.date <= state.end);
+    if (series.length === 0) series = all;
+  }
+
+  // Headline title reflects mode; sub-copy reflects the picked stat.
+  if (state.mode === 'overall') {
+    title.textContent = meta.label;
+    sub.textContent = `last ${series.length} days · ${meta.label.toLowerCase()}`;
+  } else if (state.mode === 'single') {
+    title.innerHTML = `<span style="font-family:var(--font-serif);font-style:italic;">${fmtMonthDay(state.start)}</span> · ${meta.label.toLowerCase()}`;
+    sub.textContent = `7-day window · ${meta.label.toLowerCase()}`;
+  } else {
+    title.innerHTML = `${fmtMonthDay(state.start)} — ${fmtMonthDay(state.end)}`;
+    sub.textContent = `${series.length} days · ${meta.label.toLowerCase()}`;
+  }
+
+  // Headline number: average of the selected stat over the current series. For percentages
+  // this is a straight arithmetic mean; for focus minutes it's the daily average.
+  const values = series.map(meta.get);
+  const avg = values.length ? Math.round(values.reduce((s, v) => s + v, 0) / values.length) : 0;
+  num.innerHTML = `${avg}<span class="pct"> ${meta.unit}</span>`;
+  delta.innerHTML = `<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 8l4-4 4 4"/></svg> avg`;
+
+  // Chart is always rendered now, regardless of mode — that's the main fix. Range/single
+  // used to blank out `viz` entirely, which read as "the graph broke."
+  renderLineChart(viz, labels, values, series.map(t => fmtMonthDay(t.date)));
 }
 
 // ─── Sessions list ───────────────────────────────────────────────────
@@ -665,6 +729,44 @@ function setMode(next) {
 
 document.getElementById('overallBtnGlobal').addEventListener('click', () => setMode({ mode: 'overall', start: null, end: null }));
 document.getElementById('overallBtnTrend').addEventListener('click', () => setMode({ mode: 'overall', start: null, end: null }));
+
+// Custom dropdown for the trend stat picker — button + list panel toggled by JS. Native
+// <select> popups on Windows can't be styled to match the app palette, so we bypass them.
+const trendStatPicker = document.getElementById('trendStatPicker');
+const trendStatLabel = document.getElementById('trendStatLabel');
+const trendStatMenu = document.getElementById('trendStatMenu');
+if (trendStatPicker && trendStatMenu && trendStatLabel) {
+  const closePicker = () => {
+    trendStatPicker.classList.remove('open');
+    trendStatPicker.setAttribute('aria-expanded', 'false');
+  };
+  const openPicker = () => {
+    trendStatPicker.classList.add('open');
+    trendStatPicker.setAttribute('aria-expanded', 'true');
+  };
+  trendStatPicker.addEventListener('click', (e) => {
+    // Ignore bubbles from item clicks — the item handler will close after picking.
+    if (e.target.closest('.stat-picker-menu li')) return;
+    if (trendStatPicker.classList.contains('open')) closePicker(); else openPicker();
+  });
+  trendStatPicker.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); }
+    if (e.key === 'Escape') closePicker();
+  });
+  trendStatMenu.querySelectorAll('li').forEach(li => {
+    li.addEventListener('click', () => {
+      trendStat = li.dataset.value;
+      trendStatMenu.querySelectorAll('li').forEach(x => x.classList.toggle('active', x === li));
+      trendStatLabel.textContent = li.textContent;
+      closePicker();
+      renderTrend();
+    });
+  });
+  // Click-outside dismiss.
+  document.addEventListener('click', (e) => {
+    if (!trendStatPicker.contains(e.target)) closePicker();
+  });
+}
 
 // ─── Page navigation ─────────────────────────────────────────────────
 
@@ -1071,9 +1173,11 @@ function showCyberOverlay(app, detail, elapsedSec, goal) {
   }
 
   if (cyberSub) {
-    const away = elapsedSec ? `${Math.floor(elapsedSec / 60)}m off-task` : '';
+    // Dropped the "Nm off-task" tag: with a 15s dismiss cooldown, the user gets caught long
+    // before "minutes" is meaningful, and the number was actually total session-elapsed,
+    // not off-task time — misleading either way.
     const goalPart = goal ? ` — you said you'd be doing <em>${goal}</em>` : '';
-    cyberSub.innerHTML = `${app || 'Unknown app'} — <em>${detail || 'unknown'}</em>${away ? ' · ' + away : ''}${goalPart}`;
+    cyberSub.innerHTML = `${app || 'Unknown app'} — <em>${detail || 'unknown'}</em>${goalPart}`;
   }
 }
 
@@ -1528,10 +1632,25 @@ function getAppIconHtml(category, procName) {
   if (cat.includes('youtube')) {
     return { html: `<svg viewBox="0 0 24 24" width="18" height="18" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`, hasIcon: true };
   }
-  if (cat.includes('code') || cat.includes('vs code')) {
-    return { html: `<svg viewBox="0 0 24 24" width="18" height="18" fill="#007ACC"><path d="M23.15 2.587l-15.89 15.89-4.86-4.86L0 16.015l7.26 7.26L24 5.985z"/></svg>`, hasIcon: true };
+  // Match specifically on "vs code", "vscode", or the process file "code.exe" — the old
+  // `cat.includes('code')` grabbed anything with the letters c-o-d-e (Claude Code windows,
+  // "codepen", etc.) and, worse, the SVG under it was actually a checkmark path, not the
+  // VS Code chevron. Real one below.
+  if (/(?:^|\W)(?:vscode|vs code|code\.exe|code - insiders)/.test(cat)) {
+    return { html: `<svg viewBox="0 0 100 100" width="18" height="18"><path d="M70.9 99.3L92.4 89c1.6-.8 2.6-2.4 2.6-4.2V15.2c0-1.8-1-3.4-2.6-4.2L70.9.7c-2.1-1-4.6-.6-6.3.9L23.8 38.4 6.1 25c-1.7-1.3-4-1.2-5.5.2-1.6 1.4-1.6 3.9 0 5.3l15.4 19.5L.6 69.5c-1.6 1.4-1.6 3.9 0 5.3 1.5 1.4 3.8 1.5 5.5.2l17.7-13.4 40.8 36.8c1.7 1.5 4.2 1.9 6.3.9zM75 27.2l-31 22.8 31 22.8V27.2z" fill="#007ACC"/></svg>`, hasIcon: true };
   }
-  const init = (category || procName || '??').slice(0, 2);
+  if (/(?:^|\W)(?:explorer\.exe|file explorer|windows explorer)|(?:^explorer$)/.test(cat)) {
+    return { html: `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" fill="#FFC842"/><path d="M3 8h18v3H3z" fill="#E6A11C"/></svg>`, hasIcon: true };
+  }
+  if (cat.includes('firefox')) {
+    return { html: `<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="#FF7139"/><path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm4 8c0 2.2-1.8 4-4 4s-4-1.8-4-4c0-.6.1-1.1.3-1.6.4 1 1.4 1.6 2.5 1.6.9 0 1.7-.4 2.2-1.1.5.7 1.3 1.1 2.2 1.1 1.1 0 2.1-.6 2.5-1.6.2.5.3 1 .3 1.6z" fill="#FFB84D"/></svg>`, hasIcon: true };
+  }
+  if (cat.includes('edge')) {
+    return { html: `<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="#0078D7"/><path d="M12 4a8 8 0 0 1 8 8c0 2-1 4-3 5-1 .5-2 .5-3 0-1.5-1-2-3-1-4.5.5-1 2-1.5 3-1H8c-2 0-3 1-3 3s1.5 4 4 4c2 0 3-1 4-2h5c-1 3-4 5-7 5-4 0-8-3-8-8s3-9 8-9z" fill="#33B4E5"/></svg>`, hasIcon: true };
+  }
+  // Fallback: soft initials tile — deliberately unopinionated so it's clearly a placeholder
+  // and not a wrong-looking real logo.
+  const init = (category || procName || '??').replace(/\.exe$/i, '').slice(0, 2).toUpperCase();
   return { html: `<span style="font-weight:700;font-size:12px;color:#fff;">${init}</span>`, hasIcon: false };
 }
 
@@ -1810,7 +1929,9 @@ function showSummaryAnimated(summary) {
   doneBtn.classList.add('s-hide'); doneBtn.classList.remove('s-show');
   if (sv0) sv0.textContent = '0';
   if (sv1) sv1.textContent = '0';
-  if (stv) stv.textContent = '+0';
+  // Neutral zero — countUp will paint the correct sign when it runs. Setting "+0" here
+  // and then "−800" from countUp caused a "+−800" glitch on some frames.
+  if (stv) stv.textContent = '0';
 
   // Update breakdown labels
   if (summary?.point_breakdown) {

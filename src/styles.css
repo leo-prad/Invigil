@@ -40,6 +40,12 @@
   }
 
   * { box-sizing: border-box; }
+  /* Desktop app, not a document — kill browser-y affordances so it doesn't feel like Chrome
+     with a skin. `user-select: none` on chrome; opt-in for real inputs below. Cursor stays a
+     pointer everywhere; text inputs restore their own cursor. */
+  html, body, .app, .page, .sidebar, .content { user-select: none; -webkit-user-select: none; cursor: default; }
+  input, textarea, [contenteditable="true"] { user-select: text; -webkit-user-select: text; cursor: text; }
+  button, .nav-item, .btn, .chip, .cyber-btn, [role="button"] { cursor: pointer; }
   html, body { margin: 0; padding: 0; height: 100%; }
   body {
     margin: 0;
@@ -191,6 +197,54 @@
     contain: layout style paint;
   }
   .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .card-head-actions { display: flex; align-items: center; gap: 8px; }
+
+  /* Custom dropdown — native <select>'s popup can't be themed on Windows, so this is a
+     button+listbox pair the JS toggles. Trigger looks like the pill next to it; menu is a
+     matching card that opens below. */
+  .stat-picker {
+    position: relative;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 10px 6px 12px; border-radius: 999px;
+    background: var(--paper-2); border: 1px solid var(--line);
+    color: var(--ink); font-family: var(--font-sans); font-size: 12.5px; font-weight: 500;
+    cursor: pointer; user-select: none; -webkit-user-select: none;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .stat-picker:hover { background: var(--paper); border-color: color-mix(in oklab, var(--moss) 30%, var(--line)); }
+  .stat-picker:focus-visible { outline: 2px solid color-mix(in oklab, var(--moss) 45%, transparent); outline-offset: 1px; }
+  .stat-picker.open .stat-picker-caret { transform: rotate(180deg); }
+  .stat-picker-caret { color: var(--ink-mid); transition: transform 0.14s ease; flex-shrink: 0; }
+
+  .stat-picker-menu {
+    position: absolute; top: calc(100% + 6px); right: 0;
+    list-style: none; margin: 0; padding: 4px;
+    min-width: 100%; max-width: 220px; white-space: nowrap;
+    background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 8px 20px -6px rgba(0,0,0,0.18), var(--shadow-inner);
+    z-index: 20;
+    opacity: 0; transform: translateY(-4px); pointer-events: none;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+  }
+  .stat-picker.open .stat-picker-menu {
+    opacity: 1; transform: translateY(0); pointer-events: auto;
+  }
+  .stat-picker-menu li {
+    padding: 8px 12px; border-radius: 8px; cursor: pointer;
+    font-family: var(--font-sans); font-size: 13px; color: var(--ink);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .stat-picker-menu li:hover { background: var(--paper-2); }
+  .stat-picker-menu li.active {
+    background: color-mix(in oklab, var(--moss) 15%, transparent);
+    color: var(--forest); font-weight: 600;
+  }
+  .stat-picker-menu li.active::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--moss-deep);
+  }
+  .stat-picker-menu li:not(.active)::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%; background: transparent;
+  }
   .card-title { font-family: var(--font-serif); font-style: italic; font-size: 15px; color: var(--ink); }
   .card-meta { font-size: 11px; color: var(--ink-muted); }
 
@@ -875,7 +929,7 @@
     text-transform: uppercase; color: var(--neon-cyan); text-align: center;
   }
   .cyber-justify textarea {
-    width: 100%; box-sizing: border-box; resize: vertical; min-height: 68px;
+    width: 100%; box-sizing: border-box; resize: none; min-height: 68px;
     padding: 10px 12px; border-radius: 8px;
     background: rgba(0,0,0,0.35); color: #F2ECE4;
     border: 1px solid rgba(60,230,220,0.35);

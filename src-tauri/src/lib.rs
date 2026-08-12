@@ -313,6 +313,43 @@ fn try_launch_ollama() -> Result<bool, String> {
 
 // --- Justification command ---
 
+/// Cheap deterministic checks the AI has been observed to miss on smaller models. Returns
+/// a rejection line if the reason is obviously not-a-reason (too short, filler-only, or an
+/// admission that it's a break rather than work). None means "worth sending to the AI."
+fn shallow_reason_check(reason: &str) -> Option<&'static str> {
+    let words: Vec<&str> = reason
+        .split_whitespace()
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.len() < 4 {
+        return Some("That's not a real reason — write at least a full sentence explaining how this window helps your task.");
+    }
+    if reason.chars().filter(|c| c.is_alphabetic()).count() < 12 {
+        return Some("That's too short. Explain what this window is helping you do.");
+    }
+    let lower = reason.to_lowercase();
+    // "I want / need a break" is admitting it's not work — the whole point of the flow is
+    // that this IS work, so a break-admission rejects itself.
+    const BREAK_PATTERNS: &[&str] = &[
+        "a break", "take a break", "taking a break", "need a break", "want a break",
+        "want a rest", "chill for", "relax for",
+    ];
+    if BREAK_PATTERNS.iter().any(|p| lower.contains(p)) {
+        return Some("Breaks aren't work. If you need one, that's fine — click \"I'll get back to work\" and take it, don't lie about it.");
+    }
+    // Pure-filler shorthand. Anything that reads like a shrug rather than an explanation.
+    const FILLER_ONLY: &[&str] = &[
+        "cuz", "cause", "because", "coz", "just because", "just cuz", "just cause",
+        "trust me", "it's related", "its related", "yeah", "yes", "sure",
+        "i don't know", "idk", "dunno",
+    ];
+    let stripped = lower.trim_end_matches(|c: char| !c.is_alphanumeric());
+    if FILLER_ONLY.iter().any(|f| stripped == *f) {
+        return Some("That's not an explanation. Name what specifically about this window helps your task.");
+    }
+    None
+}
+
 /// Outcome of running a "this is actually work" justification through the local AI.
 #[derive(serde::Serialize)]
 struct JustificationOutcome {
@@ -323,16 +360,6 @@ struct JustificationOutcome {
     message: Option<String>,
 }
 
-const REJECTION_LINES: &[&str] = &[
-    "Nice try. The AI didn't buy it either.",
-    "That excuse doesn't hold up. Back to work.",
-    "The local AI thinks you're lying. So do I.",
-    "Try again — but this time, with a reason that's actually true.",
-    "Even the AI is embarrassed for you.",
-    "That's not what this window is for and you know it.",
-    "Rejected. Give a real reason or get back to it.",
-    "The AI called your bluff. Wrap it up.",
-];
 
 /// Run the user's "this is actually work" text through the local AI. If plausible (or the
 /// AI is unavailable), apply the correction + allowlist server-side so the frontend
@@ -349,6 +376,12 @@ fn submit_work_justification(
             verdict: "rejected".into(),
             message: Some("You have to actually explain. \"Trust me\" isn't a reason.".into()),
         });
+    }
+
+    // Cheap pre-checks the AI has been observed to miss on smaller models: reject reasons
+    // that are too short, filler-only, or "I want a break." No round trip needed.
+    if let Some(reject) = shallow_reason_check(&reason_trimmed) {
+        return Ok(JustificationOutcome { verdict: "rejected".into(), message: Some(reject.into()) });
     }
 
     let session_state = state.session_mgr.get_state();
@@ -369,12 +402,13 @@ fn submit_work_justification(
     );
 
     match verdict {
-        Some(llm::JustifyVerdict::Implausible) => {
-            // Don't save, don't allowlist — user has to try again (or click "back to work").
-            let idx = (session_state.elapsed_sec as usize) % REJECTION_LINES.len();
+        Some(llm::JustifyVerdict::Implausible(why)) => {
+            // Don't save, don't allowlist — the specific `why` line is what the AI told the
+            // user to their face; forwarded so the overlay renders it under the textarea
+            // exactly like the goal-description validator on the start-session modal.
             Ok(JustificationOutcome {
                 verdict: "rejected".into(),
-                message: Some(REJECTION_LINES[idx].into()),
+                message: Some(why),
             })
         }
         Some(llm::JustifyVerdict::Plausible) => {

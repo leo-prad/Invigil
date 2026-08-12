@@ -120,10 +120,50 @@ pub fn extract_app_name(window: &WindowInfo) -> String {
 }
 
 /// Extract the detail/subtitle from a WindowInfo.
+///
+/// Browsers (Chrome, Edge, Firefox) put the tab title *before* the browser name:
+/// `"Attention Span - YouTube - Google Chrome"`. The generic left→right split
+/// grabs the browser name as the detail and drops the actual tab — the roast overlay
+/// then reads "Chrome — Google Chrome" and can't do anything contextual.
+/// Browser-specific rule: strip the browser suffix from the end and keep everything
+/// before it. Falls back to the generic rule for everything else.
 pub fn extract_detail(window: &WindowInfo) -> String {
     let proc_lower = window.process_name.to_lowercase();
     if proc_lower.contains("antigravity") {
         return window.title.clone();
+    }
+
+    // Browser suffix stripping — checked longest-first so multi-word suffixes win.
+    let browser_suffixes: &[&str] = &[
+        " - Google Chrome", " – Google Chrome",
+        " - Microsoft\u{200B}\u{200E} Edge", " - Microsoft Edge", " – Microsoft Edge",
+        " — Mozilla Firefox", " - Mozilla Firefox",
+        " - Brave", " – Brave",
+        " and 1 more page - Personal - Microsoft\u{200B}\u{200E} Edge",
+    ];
+    let is_browser = proc_lower.contains("chrome")
+        || proc_lower.contains("edge")
+        || proc_lower.contains("firefox")
+        || proc_lower.contains("brave");
+    if is_browser {
+        let title = &window.title;
+        for suffix in browser_suffixes {
+            if let Some(stripped) = title.strip_suffix(suffix) {
+                let cleaned = stripped.trim();
+                if !cleaned.is_empty() {
+                    return cleaned.to_string();
+                }
+            }
+        }
+        // Fallback for browser windows the suffix table missed: keep everything
+        // before the LAST " - " separator (tab titles can themselves contain " - ").
+        if let Some(idx) = title.rfind(" - ") {
+            let left = title[..idx].trim();
+            if !left.is_empty() {
+                return left.to_string();
+            }
+        }
+        return title.clone();
     }
 
     for sep in &[" — ", " - ", " | ", " · "] {

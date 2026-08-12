@@ -92,19 +92,21 @@ pub fn classify_ambiguous(
     }
 }
 
-/// Verdict from the AI when the user submits a "This is actually work" justification.
+/// Verdict + reason from the AI when the user submits a "This is actually work" justification.
 #[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", tag = "kind", content = "reason")]
 pub enum JustifyVerdict {
     /// The AI thinks the reason plausibly connects the current window to the committed task.
     Plausible,
-    /// The AI thinks the reason is unrelated, made-up, or an obvious dodge.
-    Implausible,
+    /// The AI thinks the reason is unrelated, made-up, or an obvious dodge. Carries a
+    /// short specific reason to show the user (like the goal-validation flow).
+    Implausible(String),
 }
 
 /// Ask the AI whether a user's justification for "this is actually work" plausibly
-/// connects the current window to their committed task. Returns None if Ollama is
-/// unavailable — the caller should treat that as "give the benefit of the doubt."
+/// connects the current window to their committed task, AND — when it doesn't — get a
+/// short one-line reason. Returns None if Ollama is unavailable (caller treats that as
+/// "give the benefit of the doubt").
 pub fn validate_work_justification(
     goal: &str,
     description: &str,
@@ -113,33 +115,68 @@ pub fn validate_work_justification(
     reason: &str,
 ) -> Option<JustifyVerdict> {
     let prompt = format!(
-        "You are a strict focus-tracking assistant. A student is trying to convince you that \
-         a window flagged as off-task is actually work for their session. Your job is to catch lies.\n\n\
-         The student's committed task: \"{goal}\"\n\
-         Their description of the task: \"{description}\"\n\n\
-         The currently-active window:\n\
+        "You are a strict, skeptical focus-tracking assistant. A student is trying to convince you \
+         that a window flagged as off-task is actually work for their session. Your default assumption \
+         is that they are lying — flip to PLAUSIBLE only when the reason clearly, specifically, and \
+         verifiably connects THIS window to THIS task.\n\n\
+         Student's committed task: \"{goal}\"\n\
+         Task description: \"{description}\"\n\n\
+         Currently-active window:\n\
          App: {app_name}\n\
          Title: {window_title}\n\n\
-         The student's stated reason this is work:\n\
+         Student's stated reason it's actually work:\n\
          \"{reason}\"\n\n\
-         Is the reason a plausible, specific link between THIS window and THIS task? \
-         A plausible reason names something concrete (a tool, a teacher's email, a reference \
-         page, a video tutorial) that clearly helps the task. Vague reasons (\"trust me\", \
-         \"it's related\", \"I need this\") and reasons that contradict the visible window \
-         are NOT plausible.\n\n\
-         Reply with ONLY 'plausible' or 'implausible'."
+         RULES — a reason is IMPLAUSIBLE if ANY of these apply:\n\
+         - It's fewer than about 5 words or reads as filler (\"cuz\", \"just because\", \"I need to\", \
+           \"trust me\", \"it's related\", \"yeah\").\n\
+         - It's about the student's feelings, mood, needing a break, or wanting to relax — those are \
+           reasons to STOP working, not reasons this is work.\n\
+         - It's generic and could apply to literally any window (\"I use this all the time\", \"for \
+           research\", \"it helps me focus\") without naming a specific concrete tie-in.\n\
+         - It contradicts what the window title actually says (claiming YouTube is a lecture when \
+           the title is a music video, claiming Discord is a study group when the channel is #memes).\n\
+         - It doesn't mention any specific artifact tied to the committed task — a specific tool, a \
+           teacher's name, a course code, a specific reference page, a specific tutorial, etc.\n\n\
+         A reason is PLAUSIBLE only if it names something CONCRETE and SPECIFIC (a named tool, a \
+         teacher's email, a specific reference page, a specific tutorial video) that clearly helps \
+         the committed task. \"Break\" / \"relax\" / \"just because\" are never plausible reasons for \
+         a work session.\n\n\
+         Reply in EXACTLY this format on ONE line:\n\
+         PLAUSIBLE\n\
+         or\n\
+         IMPLAUSIBLE: <one short sentence explaining why, addressing the student directly as \"you\">\n\n\
+         Examples:\n\
+         IMPLAUSIBLE: \"cuz\" isn't a reason — you need to actually name what this window helps with.\n\
+         IMPLAUSIBLE: Taking a break isn't work; it's the thing you're avoiding your work with.\n\
+         IMPLAUSIBLE: You said you're doing math but this is a music video, not a lecture.\n\
+         PLAUSIBLE"
     );
-    let response = ollama_generate(&prompt, 8)?;
-    let answer = response.trim().to_lowercase();
+    // 60 tokens is plenty for the verdict + a one-sentence reason.
+    let response = ollama_generate(&prompt, 60)?;
+    let trimmed = response.trim();
+    let lower = trimmed.to_lowercase();
 
-    if answer.starts_with("plausible") || answer.starts_with("yes") || answer.starts_with("valid") {
-        Some(JustifyVerdict::Plausible)
-    } else if answer.starts_with("implausible") || answer.starts_with("no") || answer.starts_with("invalid") {
-        Some(JustifyVerdict::Implausible)
-    } else {
-        log::warn!("LLM justification verdict was ambiguous: {}", response);
-        None
+    if lower.starts_with("plausible") || lower.starts_with("yes") || lower.starts_with("valid") {
+        return Some(JustifyVerdict::Plausible);
     }
+    if lower.starts_with("implausible") || lower.starts_with("no") || lower.starts_with("invalid") {
+        // Peel off the leading verdict word and the separator; keep what's after as the reason.
+        // Handles: "IMPLAUSIBLE: reason", "IMPLAUSIBLE - reason", "implausible reason", plain "no reason".
+        let after = trimmed
+            .splitn(2, |c: char| c == ':' || c == '-' || c == '—')
+            .nth(1)
+            .map(|s| s.trim())
+            .unwrap_or("");
+        let reason_text = if after.is_empty() {
+            // Model didn't give a reason — use a generic line so the UI still has something to render.
+            "That doesn't specifically explain how this window helps your committed task.".to_string()
+        } else {
+            after.to_string()
+        };
+        return Some(JustifyVerdict::Implausible(reason_text));
+    }
+    log::warn!("LLM justification verdict was ambiguous: {}", response);
+    None
 }
 
 /// Quick check if Ollama is reachable. Cached per-session to avoid spam.
