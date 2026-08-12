@@ -92,19 +92,21 @@ pub fn classify_ambiguous(
     }
 }
 
-/// Verdict from the AI when the user submits a "This is actually work" justification.
+/// Verdict + reason from the AI when the user submits a "This is actually work" justification.
 #[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", tag = "kind", content = "reason")]
 pub enum JustifyVerdict {
     /// The AI thinks the reason plausibly connects the current window to the committed task.
     Plausible,
-    /// The AI thinks the reason is unrelated, made-up, or an obvious dodge.
-    Implausible,
+    /// The AI thinks the reason is unrelated, made-up, or an obvious dodge. Carries a
+    /// short specific reason to show the user (like the goal-validation flow).
+    Implausible(String),
 }
 
 /// Ask the AI whether a user's justification for "this is actually work" plausibly
-/// connects the current window to their committed task. Returns None if Ollama is
-/// unavailable — the caller should treat that as "give the benefit of the doubt."
+/// connects the current window to their committed task, AND — when it doesn't — get a
+/// short one-line reason. Returns None if Ollama is unavailable (caller treats that as
+/// "give the benefit of the doubt").
 pub fn validate_work_justification(
     goal: &str,
     description: &str,
@@ -122,24 +124,42 @@ pub fn validate_work_justification(
          Title: {window_title}\n\n\
          The student's stated reason this is work:\n\
          \"{reason}\"\n\n\
-         Is the reason a plausible, specific link between THIS window and THIS task? \
-         A plausible reason names something concrete (a tool, a teacher's email, a reference \
-         page, a video tutorial) that clearly helps the task. Vague reasons (\"trust me\", \
-         \"it's related\", \"I need this\") and reasons that contradict the visible window \
-         are NOT plausible.\n\n\
-         Reply with ONLY 'plausible' or 'implausible'."
+         A PLAUSIBLE reason names something concrete (a specific tool, a teacher's email, \
+         a reference page, a tutorial) that clearly helps the committed task. Vague reasons \
+         (\"trust me\", \"it's related\", \"I need this\") and reasons that contradict the \
+         visible window are IMPLAUSIBLE.\n\n\
+         Reply in EXACTLY this format on ONE line:\n\
+         PLAUSIBLE\n\
+         or\n\
+         IMPLAUSIBLE: <one short sentence explaining why, addressing the student directly>\n\n\
+         Example: IMPLAUSIBLE: Watching a music video isn't research for a calculus assignment."
     );
-    let response = ollama_generate(&prompt, 8)?;
-    let answer = response.trim().to_lowercase();
+    // 60 tokens is plenty for the verdict + a one-sentence reason.
+    let response = ollama_generate(&prompt, 60)?;
+    let trimmed = response.trim();
+    let lower = trimmed.to_lowercase();
 
-    if answer.starts_with("plausible") || answer.starts_with("yes") || answer.starts_with("valid") {
-        Some(JustifyVerdict::Plausible)
-    } else if answer.starts_with("implausible") || answer.starts_with("no") || answer.starts_with("invalid") {
-        Some(JustifyVerdict::Implausible)
-    } else {
-        log::warn!("LLM justification verdict was ambiguous: {}", response);
-        None
+    if lower.starts_with("plausible") || lower.starts_with("yes") || lower.starts_with("valid") {
+        return Some(JustifyVerdict::Plausible);
     }
+    if lower.starts_with("implausible") || lower.starts_with("no") || lower.starts_with("invalid") {
+        // Peel off the leading verdict word and the separator; keep what's after as the reason.
+        // Handles: "IMPLAUSIBLE: reason", "IMPLAUSIBLE - reason", "implausible reason", plain "no reason".
+        let after = trimmed
+            .splitn(2, |c: char| c == ':' || c == '-' || c == '—')
+            .nth(1)
+            .map(|s| s.trim())
+            .unwrap_or("");
+        let reason_text = if after.is_empty() {
+            // Model didn't give a reason — use a generic line so the UI still has something to render.
+            "That doesn't specifically explain how this window helps your committed task.".to_string()
+        } else {
+            after.to_string()
+        };
+        return Some(JustifyVerdict::Implausible(reason_text));
+    }
+    log::warn!("LLM justification verdict was ambiguous: {}", response);
+    None
 }
 
 /// Quick check if Ollama is reachable. Cached per-session to avoid spam.

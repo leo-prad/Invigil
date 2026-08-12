@@ -152,10 +152,18 @@
         <section class="card">
           <div class="card-head">
             <div class="card-title" id="trendTitle">Attention span</div>
-            <button class="overall-btn" id="overallBtnTrend">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
-              Overall
-            </button>
+            <div class="card-head-actions">
+              <select class="stat-picker" id="trendStatPicker" title="Choose which stat to chart">
+                <option value="focus_min" selected>Focus time</option>
+                <option value="on_task_pct">On-task %</option>
+                <option value="sessions">Sessions</option>
+                <option value="points">Points</option>
+              </select>
+              <button class="overall-btn" id="overallBtnTrend">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+                Overall
+              </button>
+            </div>
           </div>
           <div class="trend-headline">
             <span class="trend-num" id="trendNum">0<span class="pct"> min</span></span>
@@ -472,7 +480,7 @@
       </div>
       <div class="summary-total-row" id="summaryTotalRow" style="opacity:0;transform:scale(0);">
         <span class="k">Total</span>
-        <span class="total-val" id="summaryTotalVal">+0</span>
+        <span class="total-val" id="summaryTotalVal">0</span>
       </div>
     </div>
 

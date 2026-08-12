@@ -9,3 +9,9 @@ node_modules/
 Thumbs.db
 .claude/
 *.log
+
+# Personal notes and editor state — kept locally, never committed
+wiki/
+raw/
+.obsidian/
+vs-code-custom.css

@@ -323,16 +323,6 @@ struct JustificationOutcome {
     message: Option<String>,
 }
 
-const REJECTION_LINES: &[&str] = &[
-    "Nice try. The AI didn't buy it either.",
-    "That excuse doesn't hold up. Back to work.",
-    "The local AI thinks you're lying. So do I.",
-    "Try again — but this time, with a reason that's actually true.",
-    "Even the AI is embarrassed for you.",
-    "That's not what this window is for and you know it.",
-    "Rejected. Give a real reason or get back to it.",
-    "The AI called your bluff. Wrap it up.",
-];
 
 /// Run the user's "this is actually work" text through the local AI. If plausible (or the
 /// AI is unavailable), apply the correction + allowlist server-side so the frontend
@@ -369,12 +359,13 @@ fn submit_work_justification(
     );
 
     match verdict {
-        Some(llm::JustifyVerdict::Implausible) => {
-            // Don't save, don't allowlist — user has to try again (or click "back to work").
-            let idx = (session_state.elapsed_sec as usize) % REJECTION_LINES.len();
+        Some(llm::JustifyVerdict::Implausible(why)) => {
+            // Don't save, don't allowlist — the specific `why` line is what the AI told the
+            // user to their face; forwarded so the overlay renders it under the textarea
+            // exactly like the goal-description validator on the start-session modal.
             Ok(JustificationOutcome {
                 verdict: "rejected".into(),
-                message: Some(REJECTION_LINES[idx].into()),
+                message: Some(why),
             })
         }
         Some(llm::JustifyVerdict::Plausible) => {

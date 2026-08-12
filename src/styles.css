@@ -40,6 +40,12 @@
   }
 
   * { box-sizing: border-box; }
+  /* Desktop app, not a document — kill browser-y affordances so it doesn't feel like Chrome
+     with a skin. `user-select: none` on chrome; opt-in for real inputs below. Cursor stays a
+     pointer everywhere; text inputs restore their own cursor. */
+  html, body, .app, .page, .sidebar, .content { user-select: none; -webkit-user-select: none; cursor: default; }
+  input, textarea, [contenteditable="true"] { user-select: text; -webkit-user-select: text; cursor: text; }
+  button, .nav-item, .btn, .chip, .cyber-btn, [role="button"] { cursor: pointer; }
   html, body { margin: 0; padding: 0; height: 100%; }
   body {
     margin: 0;
@@ -191,6 +197,15 @@
     contain: layout style paint;
   }
   .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .card-head-actions { display: flex; align-items: center; gap: 8px; }
+  .stat-picker {
+    all: unset; cursor: pointer;
+    font-family: var(--font-sans); font-size: 12.5px; font-weight: 500;
+    color: var(--ink); background: var(--paper-2);
+    padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line);
+  }
+  .stat-picker:hover { background: var(--paper); }
+  .stat-picker:focus { outline: 2px solid color-mix(in oklab, var(--moss) 40%, transparent); outline-offset: 1px; }
   .card-title { font-family: var(--font-serif); font-style: italic; font-size: 15px; color: var(--ink); }
   .card-meta { font-size: 11px; color: var(--ink-muted); }
 
@@ -875,7 +890,7 @@
     text-transform: uppercase; color: var(--neon-cyan); text-align: center;
   }
   .cyber-justify textarea {
-    width: 100%; box-sizing: border-box; resize: vertical; min-height: 68px;
+    width: 100%; box-sizing: border-box; resize: none; min-height: 68px;
     padding: 10px 12px; border-radius: 8px;
     background: rgba(0,0,0,0.35); color: #F2ECE4;
     border: 1px solid rgba(60,230,220,0.35);
