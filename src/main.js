@@ -461,18 +461,51 @@ function smoothPath(points) {
 const ENERGY_BOLT = '<path d="M13 2 3 14h6l-1 8 10-12h-6l1-8Z" fill="var(--peak-line)"/>';
 
 function renderLineChart(viz, labels, values, xlabels) {
-  const W = 600, H = 150, PAD_L = 4, PAD_R = 4, PAD_T = 10, PAD_B = 10;
-  const maxV = Math.max(...values, 1);
+  // Wider left padding to fit y-axis tick labels ("100", "-102" etc). Top and bottom pad
+  // are non-zero so the curve doesn't clip against the frame or the value dot.
+  const W = 600, H = 150, PAD_L = 44, PAD_R = 10, PAD_T = 14, PAD_B = 14;
   const n = values.length;
   if (n === 0) { viz.innerHTML = '<div class="empty-state">No data yet.</div>'; labels.innerHTML = ''; return; }
+
+  // Domain: always include 0 so negative streaks show against a clear baseline. When all
+  // values are 0 the y-mapping would divide by 0 — collapse to a symmetric ±1 span.
+  const rawMax = Math.max(...values);
+  const rawMin = Math.min(...values);
+  let dMax = Math.max(rawMax, 0);
+  let dMin = Math.min(rawMin, 0);
+  if (dMax === dMin) { dMax = 1; dMin = -1; }
+  // A little headroom/floor so the curve peak/trough doesn't kiss the frame.
+  const padSpan = (dMax - dMin) * 0.08;
+  dMax += padSpan; dMin -= padSpan;
+
   const step = (W - PAD_L - PAD_R) / (n - 1 || 1);
-  const y = v => PAD_T + (1 - v / maxV) * (H - PAD_T - PAD_B);
+  const y = v => PAD_T + (1 - (v - dMin) / (dMax - dMin)) * (H - PAD_T - PAD_B);
   const pts = values.map((v, i) => [PAD_L + i * step, y(v)]);
   const curve = smoothPath(pts);
-  const areaPath = curve + ` L${pts[pts.length-1][0].toFixed(1)},${H} L${pts[0][0].toFixed(1)},${H} Z`;
+  const baselineY = y(0);   // where "0" sits on the y-axis
+  // Area fills between curve and 0-baseline — positive segments fill down, negative up.
+  const areaPath = curve
+    + ` L${pts[pts.length-1][0].toFixed(1)},${baselineY.toFixed(1)}`
+    + ` L${pts[0][0].toFixed(1)},${baselineY.toFixed(1)} Z`;
   const last = pts[pts.length - 1];
   const dotXPct = (last[0] / W) * 100;
   const dotYPct = (last[1] / H) * 100;
+
+  // Y-axis ticks: bottom (dMin approx), middle, top (dMax approx). Rounded to nice numbers.
+  const ticks = [
+    { v: dMax - padSpan, pos: y(dMax - padSpan) },
+    { v: (dMax + dMin) / 2, pos: y((dMax + dMin) / 2) },
+    { v: dMin + padSpan, pos: y(dMin + padSpan) },
+  ];
+  const yTicksSvg = ticks.map(t => `
+    <line x1="${PAD_L}" y1="${t.pos.toFixed(1)}" x2="${W}" y2="${t.pos.toFixed(1)}" stroke="var(--line)" stroke-dasharray="1 5"/>
+    <text x="${PAD_L - 6}" y="${(t.pos + 3.5).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--ink-muted)" font-family="var(--font-sans)">${Math.round(t.v)}</text>
+  `).join('');
+  // Zero line drawn a shade darker whenever the domain actually straddles zero.
+  const zeroLineSvg = (rawMin < 0 && rawMax > 0)
+    ? `<line x1="${PAD_L}" y1="${baselineY.toFixed(1)}" x2="${W}" y2="${baselineY.toFixed(1)}" stroke="var(--ink-muted)" stroke-opacity="0.35" stroke-width="1"/>`
+    : '';
+
   viz.innerHTML = `
     <svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
       <defs>
@@ -481,9 +514,8 @@ function renderLineChart(viz, labels, values, xlabels) {
           <stop offset="100%" stop-color="var(--moss)" stop-opacity="0"/>
         </linearGradient>
       </defs>
-      <line x1="0" y1="30" x2="${W}" y2="30" stroke="var(--line)" stroke-dasharray="1 5"/>
-      <line x1="0" y1="75" x2="${W}" y2="75" stroke="var(--line)" stroke-dasharray="1 5"/>
-      <line x1="0" y1="120" x2="${W}" y2="120" stroke="var(--line)" stroke-dasharray="1 5"/>
+      ${yTicksSvg}
+      ${zeroLineSvg}
       <path d="${areaPath}" fill="url(#trendFill)"/>
       <path d="${curve}" fill="none" stroke="var(--moss-deep)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
     </svg>
@@ -497,11 +529,14 @@ function renderLineChart(viz, labels, values, xlabels) {
 // mode changes (single/range/overall) within the session so the picker feels sticky.
 let trendStat = 'focus_min';
 
+// One display name per stat — the trend card's title uses `label` too so it never disagrees
+// with the picker's selected option. (Old code had a distinct `overallTitle: 'Attention span'`
+// for focus_min, which read as a broken cross-reference against the picker's "Focus time".)
 const TREND_STAT_META = {
-  focus_min:   { label: 'Focus time',   overallTitle: 'Attention span', get: d => d.total_minutes,          unit: 'min' },
-  on_task_pct: { label: 'On-task %',    overallTitle: 'On-task %',      get: d => Math.round(d.on_task_pct), unit: '%' },
-  sessions:    { label: 'Sessions',     overallTitle: 'Sessions/day',    get: d => d.session_count,         unit: '' },
-  points:      { label: 'Points',       overallTitle: 'Points/day',      get: d => d.points || 0,           unit: '' },
+  focus_min:   { label: 'Focus time',    get: d => d.total_minutes,          unit: 'min' },
+  on_task_pct: { label: 'On-task %',     get: d => Math.round(d.on_task_pct), unit: '%' },
+  sessions:    { label: 'Sessions/day',  get: d => d.session_count,          unit: '' },
+  points:      { label: 'Points/day',    get: d => d.points || 0,            unit: '' },
 };
 
 function renderTrend() {
@@ -517,7 +552,7 @@ function renderTrend() {
   // shows a 7-day window centered on the picked date so the chart still makes sense.
   const all = liveData?.trend_14d || [];
   if (all.length === 0) {
-    title.textContent = meta.overallTitle;
+    title.textContent = meta.label;
     sub.textContent = 'no data yet — start a session';
     num.innerHTML = `0<span class="pct"> ${meta.unit}</span>`;
     delta.innerHTML = '';
@@ -542,7 +577,7 @@ function renderTrend() {
 
   // Headline title reflects mode; sub-copy reflects the picked stat.
   if (state.mode === 'overall') {
-    title.textContent = meta.overallTitle;
+    title.textContent = meta.label;
     sub.textContent = `last ${series.length} days · ${meta.label.toLowerCase()}`;
   } else if (state.mode === 'single') {
     title.innerHTML = `<span style="font-family:var(--font-serif);font-style:italic;">${fmtMonthDay(state.start)}</span> · ${meta.label.toLowerCase()}`;
@@ -695,11 +730,41 @@ function setMode(next) {
 document.getElementById('overallBtnGlobal').addEventListener('click', () => setMode({ mode: 'overall', start: null, end: null }));
 document.getElementById('overallBtnTrend').addEventListener('click', () => setMode({ mode: 'overall', start: null, end: null }));
 
+// Custom dropdown for the trend stat picker — button + list panel toggled by JS. Native
+// <select> popups on Windows can't be styled to match the app palette, so we bypass them.
 const trendStatPicker = document.getElementById('trendStatPicker');
-if (trendStatPicker) {
-  trendStatPicker.addEventListener('change', () => {
-    trendStat = trendStatPicker.value;
-    renderTrend();
+const trendStatLabel = document.getElementById('trendStatLabel');
+const trendStatMenu = document.getElementById('trendStatMenu');
+if (trendStatPicker && trendStatMenu && trendStatLabel) {
+  const closePicker = () => {
+    trendStatPicker.classList.remove('open');
+    trendStatPicker.setAttribute('aria-expanded', 'false');
+  };
+  const openPicker = () => {
+    trendStatPicker.classList.add('open');
+    trendStatPicker.setAttribute('aria-expanded', 'true');
+  };
+  trendStatPicker.addEventListener('click', (e) => {
+    // Ignore bubbles from item clicks — the item handler will close after picking.
+    if (e.target.closest('.stat-picker-menu li')) return;
+    if (trendStatPicker.classList.contains('open')) closePicker(); else openPicker();
+  });
+  trendStatPicker.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); }
+    if (e.key === 'Escape') closePicker();
+  });
+  trendStatMenu.querySelectorAll('li').forEach(li => {
+    li.addEventListener('click', () => {
+      trendStat = li.dataset.value;
+      trendStatMenu.querySelectorAll('li').forEach(x => x.classList.toggle('active', x === li));
+      trendStatLabel.textContent = li.textContent;
+      closePicker();
+      renderTrend();
+    });
+  });
+  // Click-outside dismiss.
+  document.addEventListener('click', (e) => {
+    if (!trendStatPicker.contains(e.target)) closePicker();
   });
 }
 

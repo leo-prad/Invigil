@@ -115,24 +115,41 @@ pub fn validate_work_justification(
     reason: &str,
 ) -> Option<JustifyVerdict> {
     let prompt = format!(
-        "You are a strict focus-tracking assistant. A student is trying to convince you that \
-         a window flagged as off-task is actually work for their session. Your job is to catch lies.\n\n\
-         The student's committed task: \"{goal}\"\n\
-         Their description of the task: \"{description}\"\n\n\
-         The currently-active window:\n\
+        "You are a strict, skeptical focus-tracking assistant. A student is trying to convince you \
+         that a window flagged as off-task is actually work for their session. Your default assumption \
+         is that they are lying — flip to PLAUSIBLE only when the reason clearly, specifically, and \
+         verifiably connects THIS window to THIS task.\n\n\
+         Student's committed task: \"{goal}\"\n\
+         Task description: \"{description}\"\n\n\
+         Currently-active window:\n\
          App: {app_name}\n\
          Title: {window_title}\n\n\
-         The student's stated reason this is work:\n\
+         Student's stated reason it's actually work:\n\
          \"{reason}\"\n\n\
-         A PLAUSIBLE reason names something concrete (a specific tool, a teacher's email, \
-         a reference page, a tutorial) that clearly helps the committed task. Vague reasons \
-         (\"trust me\", \"it's related\", \"I need this\") and reasons that contradict the \
-         visible window are IMPLAUSIBLE.\n\n\
+         RULES — a reason is IMPLAUSIBLE if ANY of these apply:\n\
+         - It's fewer than about 5 words or reads as filler (\"cuz\", \"just because\", \"I need to\", \
+           \"trust me\", \"it's related\", \"yeah\").\n\
+         - It's about the student's feelings, mood, needing a break, or wanting to relax — those are \
+           reasons to STOP working, not reasons this is work.\n\
+         - It's generic and could apply to literally any window (\"I use this all the time\", \"for \
+           research\", \"it helps me focus\") without naming a specific concrete tie-in.\n\
+         - It contradicts what the window title actually says (claiming YouTube is a lecture when \
+           the title is a music video, claiming Discord is a study group when the channel is #memes).\n\
+         - It doesn't mention any specific artifact tied to the committed task — a specific tool, a \
+           teacher's name, a course code, a specific reference page, a specific tutorial, etc.\n\n\
+         A reason is PLAUSIBLE only if it names something CONCRETE and SPECIFIC (a named tool, a \
+         teacher's email, a specific reference page, a specific tutorial video) that clearly helps \
+         the committed task. \"Break\" / \"relax\" / \"just because\" are never plausible reasons for \
+         a work session.\n\n\
          Reply in EXACTLY this format on ONE line:\n\
          PLAUSIBLE\n\
          or\n\
-         IMPLAUSIBLE: <one short sentence explaining why, addressing the student directly>\n\n\
-         Example: IMPLAUSIBLE: Watching a music video isn't research for a calculus assignment."
+         IMPLAUSIBLE: <one short sentence explaining why, addressing the student directly as \"you\">\n\n\
+         Examples:\n\
+         IMPLAUSIBLE: \"cuz\" isn't a reason — you need to actually name what this window helps with.\n\
+         IMPLAUSIBLE: Taking a break isn't work; it's the thing you're avoiding your work with.\n\
+         IMPLAUSIBLE: You said you're doing math but this is a music video, not a lecture.\n\
+         PLAUSIBLE"
     );
     // 60 tokens is plenty for the verdict + a one-sentence reason.
     let response = ollama_generate(&prompt, 60)?;

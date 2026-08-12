@@ -313,6 +313,43 @@ fn try_launch_ollama() -> Result<bool, String> {
 
 // --- Justification command ---
 
+/// Cheap deterministic checks the AI has been observed to miss on smaller models. Returns
+/// a rejection line if the reason is obviously not-a-reason (too short, filler-only, or an
+/// admission that it's a break rather than work). None means "worth sending to the AI."
+fn shallow_reason_check(reason: &str) -> Option<&'static str> {
+    let words: Vec<&str> = reason
+        .split_whitespace()
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.len() < 4 {
+        return Some("That's not a real reason — write at least a full sentence explaining how this window helps your task.");
+    }
+    if reason.chars().filter(|c| c.is_alphabetic()).count() < 12 {
+        return Some("That's too short. Explain what this window is helping you do.");
+    }
+    let lower = reason.to_lowercase();
+    // "I want / need a break" is admitting it's not work — the whole point of the flow is
+    // that this IS work, so a break-admission rejects itself.
+    const BREAK_PATTERNS: &[&str] = &[
+        "a break", "take a break", "taking a break", "need a break", "want a break",
+        "want a rest", "chill for", "relax for",
+    ];
+    if BREAK_PATTERNS.iter().any(|p| lower.contains(p)) {
+        return Some("Breaks aren't work. If you need one, that's fine — click \"I'll get back to work\" and take it, don't lie about it.");
+    }
+    // Pure-filler shorthand. Anything that reads like a shrug rather than an explanation.
+    const FILLER_ONLY: &[&str] = &[
+        "cuz", "cause", "because", "coz", "just because", "just cuz", "just cause",
+        "trust me", "it's related", "its related", "yeah", "yes", "sure",
+        "i don't know", "idk", "dunno",
+    ];
+    let stripped = lower.trim_end_matches(|c: char| !c.is_alphanumeric());
+    if FILLER_ONLY.iter().any(|f| stripped == *f) {
+        return Some("That's not an explanation. Name what specifically about this window helps your task.");
+    }
+    None
+}
+
 /// Outcome of running a "this is actually work" justification through the local AI.
 #[derive(serde::Serialize)]
 struct JustificationOutcome {
@@ -339,6 +376,12 @@ fn submit_work_justification(
             verdict: "rejected".into(),
             message: Some("You have to actually explain. \"Trust me\" isn't a reason.".into()),
         });
+    }
+
+    // Cheap pre-checks the AI has been observed to miss on smaller models: reject reasons
+    // that are too short, filler-only, or "I want a break." No round trip needed.
+    if let Some(reject) = shallow_reason_check(&reason_trimmed) {
+        return Ok(JustificationOutcome { verdict: "rejected".into(), message: Some(reject.into()) });
     }
 
     let session_state = state.session_mgr.get_state();
