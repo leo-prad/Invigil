@@ -20,32 +20,19 @@ pub enum LlmVerdict {
     OffTask,
 }
 
-/// Ask the local Gemma model whether the current window is on-task for the
-/// given study goal and detailed description. Returns `None` if Ollama is unavailable or the model
-/// can't decide.
-pub fn classify_ambiguous(
-    goal: &str,
-    description: &str,
-    app_name: &str,
-    window_title: &str,
-) -> Option<LlmVerdict> {
-    let prompt = build_prompt(goal, description, app_name, window_title);
+/// Send a prompt to the local Ollama /api/generate endpoint and return the response
+/// text. Returns None if Ollama isn't reachable, the request fails, or the response
+/// can't be parsed. Handles both chunked and non-chunked HTTP responses.
+fn ollama_generate(prompt: &str, num_predict: i32) -> Option<String> {
     let body = serde_json::json!({
         "model": MODEL,
         "prompt": prompt,
         "stream": false,
-        "options": {
-            "temperature": 0.0,
-            "num_predict": 12
-        }
+        "options": { "temperature": 0.0, "num_predict": num_predict }
     });
     let body_bytes = serde_json::to_vec(&body).ok()?;
 
-    // Build a raw HTTP POST — avoids pulling in reqwest/ureq as a dependency
-    let mut stream = TcpStream::connect_timeout(
-        &OLLAMA_HOST.parse().ok()?,
-        TIMEOUT,
-    ).ok()?;
+    let mut stream = TcpStream::connect_timeout(&OLLAMA_HOST.parse().ok()?, TIMEOUT).ok()?;
     stream.set_read_timeout(Some(READ_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(TIMEOUT)).ok()?;
 
@@ -64,17 +51,14 @@ pub fn classify_ambiguous(
     stream.write_all(&body_bytes).ok()?;
     stream.flush().ok()?;
 
-    // Read response
     let mut buf = Vec::with_capacity(4096);
     stream.read_to_end(&mut buf).ok()?;
     let raw = String::from_utf8_lossy(&buf);
 
-    // Find the JSON body after the HTTP headers
     let json_start = raw.find("\r\n\r\n").map(|i| i + 4)
         .or_else(|| raw.find("\n\n").map(|i| i + 2))?;
     let json_str = &raw[json_start..];
 
-    // Handle chunked transfer encoding — take the first chunk
     let json_clean = if json_str.starts_with(|c: char| c.is_ascii_hexdigit()) {
         json_str.lines().nth(1).unwrap_or(json_str)
     } else {
@@ -82,14 +66,78 @@ pub fn classify_ambiguous(
     };
 
     let resp: OllamaResponse = serde_json::from_str(json_clean.trim()).ok()?;
-    let answer = resp.response.trim().to_lowercase();
+    Some(resp.response)
+}
+
+/// Ask the local Gemma model whether the current window is on-task for the
+/// given study goal and detailed description. Returns `None` if Ollama is unavailable or the model
+/// can't decide.
+pub fn classify_ambiguous(
+    goal: &str,
+    description: &str,
+    app_name: &str,
+    window_title: &str,
+) -> Option<LlmVerdict> {
+    let prompt = build_prompt(goal, description, app_name, window_title);
+    let response = ollama_generate(&prompt, 12)?;
+    let answer = response.trim().to_lowercase();
 
     if answer.starts_with("on_task") || answer.starts_with("on task") || answer.starts_with("yes") {
         Some(LlmVerdict::OnTask)
     } else if answer.starts_with("off_task") || answer.starts_with("off task") || answer.starts_with("no") {
         Some(LlmVerdict::OffTask)
     } else {
-        log::warn!("LLM returned ambiguous answer: {}", resp.response);
+        log::warn!("LLM returned ambiguous answer: {}", response);
+        None
+    }
+}
+
+/// Verdict from the AI when the user submits a "This is actually work" justification.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum JustifyVerdict {
+    /// The AI thinks the reason plausibly connects the current window to the committed task.
+    Plausible,
+    /// The AI thinks the reason is unrelated, made-up, or an obvious dodge.
+    Implausible,
+}
+
+/// Ask the AI whether a user's justification for "this is actually work" plausibly
+/// connects the current window to their committed task. Returns None if Ollama is
+/// unavailable — the caller should treat that as "give the benefit of the doubt."
+pub fn validate_work_justification(
+    goal: &str,
+    description: &str,
+    app_name: &str,
+    window_title: &str,
+    reason: &str,
+) -> Option<JustifyVerdict> {
+    let prompt = format!(
+        "You are a strict focus-tracking assistant. A student is trying to convince you that \
+         a window flagged as off-task is actually work for their session. Your job is to catch lies.\n\n\
+         The student's committed task: \"{goal}\"\n\
+         Their description of the task: \"{description}\"\n\n\
+         The currently-active window:\n\
+         App: {app_name}\n\
+         Title: {window_title}\n\n\
+         The student's stated reason this is work:\n\
+         \"{reason}\"\n\n\
+         Is the reason a plausible, specific link between THIS window and THIS task? \
+         A plausible reason names something concrete (a tool, a teacher's email, a reference \
+         page, a video tutorial) that clearly helps the task. Vague reasons (\"trust me\", \
+         \"it's related\", \"I need this\") and reasons that contradict the visible window \
+         are NOT plausible.\n\n\
+         Reply with ONLY 'plausible' or 'implausible'."
+    );
+    let response = ollama_generate(&prompt, 8)?;
+    let answer = response.trim().to_lowercase();
+
+    if answer.starts_with("plausible") || answer.starts_with("yes") || answer.starts_with("valid") {
+        Some(JustifyVerdict::Plausible)
+    } else if answer.starts_with("implausible") || answer.starts_with("no") || answer.starts_with("invalid") {
+        Some(JustifyVerdict::Implausible)
+    } else {
+        log::warn!("LLM justification verdict was ambiguous: {}", response);
         None
     }
 }
@@ -105,6 +153,95 @@ pub fn is_ollama_available() -> bool {
     ).is_ok()
 }
 
+/// Where the Ollama installer drops `ollama.exe` on Windows. Checked in order — first hit wins.
+#[cfg(windows)]
+fn find_ollama_binary() -> Option<std::path::PathBuf> {
+    let candidates = [
+        std::env::var("LOCALAPPDATA").ok().map(|p| format!("{}\\Programs\\Ollama\\ollama.exe", p)),
+        std::env::var("ProgramFiles").ok().map(|p| format!("{}\\Ollama\\ollama.exe", p)),
+        std::env::var("ProgramFiles(x86)").ok().map(|p| format!("{}\\Ollama\\ollama.exe", p)),
+    ];
+    for c in candidates.into_iter().flatten() {
+        let p = std::path::PathBuf::from(&c);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn find_ollama_binary() -> Option<std::path::PathBuf> {
+    // POSIX: look on PATH via `which`-style probe.
+    for prefix in ["/usr/local/bin", "/usr/bin", "/opt/homebrew/bin"] {
+        let p = std::path::PathBuf::from(prefix).join("ollama");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Three-state status the frontend uses to decide whether to auto-launch Ollama or
+/// show an "install this for better classifications" banner.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum OllamaStatus {
+    Running,
+    InstalledNotRunning,
+    NotInstalled,
+}
+
+pub fn get_ollama_status() -> OllamaStatus {
+    if is_ollama_available() {
+        OllamaStatus::Running
+    } else if find_ollama_binary().is_some() {
+        OllamaStatus::InstalledNotRunning
+    } else {
+        OllamaStatus::NotInstalled
+    }
+}
+
+/// Spawn `ollama serve` in the background. Returns Ok(true) if the process was launched
+/// AND the API port became reachable within a short window, Ok(false) if we spawned but
+/// it never came up, or Err if we couldn't find/spawn the binary at all.
+pub fn try_launch_ollama() -> Result<bool, String> {
+    let bin = find_ollama_binary().ok_or_else(|| "Ollama binary not found".to_string())?;
+
+    #[cfg(windows)]
+    let spawn_result = {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW = 0x08000000 — keeps a console flash from popping up.
+        std::process::Command::new(&bin)
+            .arg("serve")
+            .creation_flags(0x08000000)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+    };
+    #[cfg(not(windows))]
+    let spawn_result = std::process::Command::new(&bin)
+        .arg("serve")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    if let Err(e) = spawn_result {
+        return Err(format!("Failed to launch Ollama: {}", e));
+    }
+
+    // Poll for readiness for up to ~5 seconds.
+    for _ in 0..10 {
+        std::thread::sleep(Duration::from_millis(500));
+        if is_ollama_available() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Verify if a goal text and description are a real study/work task (min 25 chars) using Gemma LLM.
 /// Returns Ok("") if valid, or Ok("reason") if rejected.
 pub fn validate_goal(goal: &str, description: &str) -> String {
@@ -113,6 +250,22 @@ pub fn validate_goal(goal: &str, description: &str) -> String {
 
     if clean_goal.len() < 2 || clean_desc.len() < 25 {
         return "Description must be at least 25 characters.".into();
+    }
+
+    // Content moderation — reject inappropriate/illegal content
+    let blocked = [
+        "meth", "cocaine", "heroin", "fentanyl", "crack", "ecstasy", "mdma",
+        "lsd", "ketamine", "pcp", "opioid", "amphetamine", "xanax", "molly",
+        "weed", "marijuana", "shrooms", "mushrooms", "dmt", "opium",
+        "fuck", "shit", "bitch", "dick", "porn", "hentai", "nsfw",
+        "kill", "murder", "suicide", "bomb", "terrorism",
+    ];
+    let combined_lower = format!("{} {}", clean_goal, clean_desc).to_lowercase();
+    let combined_words: Vec<&str> = combined_lower.split(|c: char| !c.is_alphanumeric()).collect();
+    for word in &combined_words {
+        if blocked.contains(word) {
+            return "That doesn't look like a real study or work task.".into();
+        }
     }
 
     // Quick heuristic check for keyboard spam

@@ -24,6 +24,8 @@ let liveData = null;     // DashboardData from backend
 let sessionActive = false;
 let timerInterval = null;
 let elapsedSec = 0;
+let currentGoal = '';    // kept in sync from session-tick-result, used by the drift overlay
+let currentDriftApp = ''; // most recent drift app; used by "This is actually work" to allowlist it
 let prevElapsedText = '';
 let prevLeafTimeText = '--:--';
 const state = { mode: 'overall', start: null, end: null };
@@ -44,9 +46,11 @@ async function init() {
     document.body.classList.add('overlay-mode');
     document.querySelector('.page-wrap')?.remove();
     document.getElementById('leafLetoutCard')?.remove();
-    const cyber = document.getElementById('cyberOverlay');
-    if (cyber) cyber.style.display = 'flex';
-    setupListeners();
+    // Do NOT force #cyberOverlay visible here — it stays at its default display:none
+    // until a real drift-detected event fills it in and shows it. Forcing it on at
+    // load meant the static placeholder markup was what got shown if that event was
+    // ever missed, which read as "the app is showing hardcoded fake data."
+    setupOverlayListeners();
     return;
   }
 
@@ -110,6 +114,46 @@ async function init() {
   setupListeners();
   setupSettings();
   setupAdvPanel();
+  checkOllamaOnLoad();
+}
+
+// Detect whether the local AI (Ollama) is reachable at app start. If it's installed but
+// not running, launch it silently in the background. If it isn't installed at all, show a
+// gentle banner suggesting install for better classifications — nothing about it is
+// required, everything still works via the rule/heuristic fallback.
+async function checkOllamaOnLoad() {
+  const tip = document.getElementById('ollamaTip');
+  let status;
+  try { status = await invoke('get_ollama_status'); } catch(e) { return; }
+
+  if (status === 'running') {
+    if (tip) tip.style.display = 'none';
+    return;
+  }
+
+  if (status === 'installed_not_running') {
+    try {
+      const launched = await invoke('try_launch_ollama');
+      if (launched) {
+        if (tip) tip.style.display = 'none';
+        return;
+      }
+    } catch(e) {}
+    // Fall through to the not-installed banner if launch didn't stick.
+  }
+
+  if (tip) {
+    tip.innerHTML = `
+      <span class="ico">💡</span>
+      <div>
+        <b>Local AI isn't set up.</b> Invigil falls back to a keyword-match rule when it can't ask a local model — that misses a lot of nuance (e.g. "watching a Khan Academy math video" looks like YouTube, not studying).
+        Install <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> and pull the <code>gemma:e4b</code> model for much better classification.
+      </div>
+      <button class="close" id="ollamaTipClose" title="Dismiss">×</button>
+    `;
+    tip.style.display = 'flex';
+    document.getElementById('ollamaTipClose')?.addEventListener('click', () => { tip.style.display = 'none'; });
+  }
 }
 
 // ─── Greeting ────────────────────────────────────────────────────────
@@ -914,18 +958,122 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
 
 const cyberOverlay = document.getElementById('cyberOverlay');
 const cyberContent = document.getElementById('cyberContent');
+const cyberHero = document.getElementById('cyberHero');
+const cyberSub = document.getElementById('cyberSub');
 
-function showCyberOverlay(app, detail, elapsedSec) {
+// Cynical/mean roast lines. Structured as (matcher, lines) pairs — the first matcher
+// that fits the current app or window title wins, otherwise we fall back to GENERIC.
+// The matcher checks both app-name and detail so browser tabs ("YouTube - foo") route
+// to the YouTube pool even when the process is just "chrome" or "firefox".
+const APP_ROASTS = [
+  {
+    match: /discord|slack|whatsapp|telegram|imessage/i,
+    lines: [
+      (a, d) => `NOBODY IN ${(a || 'CHAT').toUpperCase()} IS DOING YOUR HOMEWORK FOR YOU.`,
+      () => `THE GROUP CHAT WILL STILL BE THERE. YOUR GRADE MIGHT NOT.`,
+      (a) => `STILL SCROLLING ${(a || 'CHAT').toUpperCase()}. STILL BEHIND.`,
+      () => `NO ONE'S SAYING ANYTHING IMPORTANT. CLOSE IT.`,
+    ],
+  },
+  {
+    match: /youtube|netflix|twitch|hulu|primevideo|disney/i,
+    lines: [
+      (a) => `${(a || 'VIDEOS').toUpperCase()} ≠ STUDYING. NICE TRY.`,
+      (a, d) => `"${(d || 'this video').slice(0, 32)}" CAN WAIT UNTIL YOU'RE DONE.`,
+      () => `AUTOPLAY IS EATING YOUR EVENING.`,
+      () => `ONE MORE VIDEO. YEAH RIGHT.`,
+    ],
+  },
+  {
+    match: /reddit|twitter|x\.com|instagram|tiktok|facebook|snapchat/i,
+    lines: [
+      (a) => `${(a || 'SOCIAL').toUpperCase()} IS NOT ON THE STUDY GUIDE.`,
+      () => `THE ALGORITHM KNOWS YOU DON'T WANT TO WORK. IT'S WINNING.`,
+      (a) => `HOW'S THAT ${(a || 'FEED').toUpperCase()} DOOM SCROLL TREATING YOUR GPA?`,
+      () => `INFINITE SCROLL. FINITE TIME.`,
+    ],
+  },
+  {
+    match: /steam|epicgames|riot|leagueoflegends|valorant|minecraft|fortnite|roblox|battle\.net/i,
+    lines: [
+      (a) => `${(a || 'THIS GAME').toUpperCase()} IS FUN. FAILING ISN'T.`,
+      () => `RANK UP AT WHATEVER. RANK DOWN IN CLASS.`,
+      () => `PIXELS AREN'T POINTS. GAME LATER.`,
+      () => `IMAGINE EXPLAINING THIS TO YOUR PARENTS.`,
+    ],
+  },
+  {
+    match: /gmail|outlook|mail\.google|yahoo mail/i,
+    lines: [
+      () => `EMAIL IS NOT WORK. IT'S THE ILLUSION OF WORK.`,
+      () => `INBOX ZERO WON'T FINISH YOUR HOMEWORK.`,
+      () => `REPLYING TO EMAILS IS PROCRASTINATION IN A DRESS SHIRT.`,
+    ],
+  },
+  {
+    match: /explorer|finder|file explorer/i,
+    lines: [
+      () => `"ORGANIZING FILES" IS THE OLDEST TRICK IN THE BOOK.`,
+      () => `THE FOLDER ISN'T THE ASSIGNMENT. OPEN IT.`,
+    ],
+  },
+  {
+    match: /spotify|apple music|youtube music/i,
+    lines: [
+      () => `PICKING THE PERFECT PLAYLIST IS NOT STUDYING.`,
+      () => `PUT ON SOMETHING. GO BACK TO WORK.`,
+    ],
+  },
+];
+
+// Generic fallback pool — used when nothing in APP_ROASTS matches.
+const GENERIC_ROASTS = [
+  (a) => `SERIOUSLY? ${(a || 'THIS').toUpperCase()}?`,
+  () => `PATHETIC. GET BACK TO WORK.`,
+  (a) => `${(a || 'THAT').toUpperCase()} ISN'T YOUR JOB.`,
+  () => `WOW. GREAT COMMITMENT TO FAILING.`,
+  (a) => `YOU CHOSE ${(a || 'THIS').toUpperCase()} OVER YOUR OWN FUTURE.`,
+  () => `THIS IS EMBARRASSING TO WATCH.`,
+  (a) => `${(a || 'IT').toUpperCase()} CAN WAIT. YOUR DEADLINE CAN'T.`,
+  () => `STOP LYING TO YOURSELF.`,
+  () => `NOBODY IS COMING TO SAVE YOUR GRADE.`,
+  (a) => `${(a || 'THIS')} AGAIN? REALLY?`,
+];
+
+let lastRoastIdx = -1;
+
+function pickRoastLine(app, detail) {
+  const haystack = `${app || ''} ${detail || ''}`;
+  const bucket = APP_ROASTS.find(r => r.match.test(haystack));
+  const pool = bucket ? bucket.lines : GENERIC_ROASTS;
+  let idx = Math.floor(Math.random() * pool.length);
+  if (pool.length > 1 && idx === lastRoastIdx) {
+    idx = (idx + 1) % pool.length;
+  }
+  lastRoastIdx = idx;
+  return pool[idx](app, detail);
+}
+
+function showCyberOverlay(app, detail, elapsedSec, goal) {
+  currentDriftApp = app || '';
   cyberOverlay.style.display = 'flex';
+  // Reset the "This is actually work" input flow every time the overlay re-appears —
+  // otherwise a half-filled textarea from the last dismissal lingers.
+  resetCyberJustify();
   cyberContent.classList.remove('shake');
   void cyberContent.offsetWidth;
   cyberContent.classList.add('shake');
 
-  // Update the overlay text
-  const subEl = cyberOverlay.querySelector('.cyber-sub');
-  if (subEl) {
-    const away = elapsedSec ? `${Math.floor(elapsedSec / 60)}m away` : '';
-    subEl.innerHTML = `${app || 'Unknown'} — <em>${detail || ''}</em> ${away ? '· ' + away : ''}`;
+  if (cyberHero) {
+    const line = pickRoastLine(app, detail);
+    cyberHero.textContent = line;
+    cyberHero.setAttribute('data-text', line);
+  }
+
+  if (cyberSub) {
+    const away = elapsedSec ? `${Math.floor(elapsedSec / 60)}m off-task` : '';
+    const goalPart = goal ? ` — you said you'd be doing <em>${goal}</em>` : '';
+    cyberSub.innerHTML = `${app || 'Unknown app'} — <em>${detail || 'unknown'}</em>${away ? ' · ' + away : ''}${goalPart}`;
   }
 }
 
@@ -934,13 +1082,113 @@ function hideCyberOverlay() {
   try { invoke('hide_drift_overlay'); } catch(e) {}
 }
 
-demoDriftBtn.addEventListener('click', () => showCyberOverlay('Discord', '#general', 47));
-document.getElementById('cyberWorkBtn').addEventListener('click', async () => {
+demoDriftBtn.addEventListener('click', () => showCyberOverlay('Discord', '#general', 47, 'Calc HW'));
+
+// "This is actually work" runs a two-step flow: click reveals a textarea; submit sends
+// the reason through the local AI. The backend decides — if the AI calls it BS, we keep
+// the overlay up and show the rejection message. All the correct/allowlist bookkeeping
+// happens on the backend as part of that same call, so the frontend just reacts to the
+// verdict.
+const cyberActionsEl = document.getElementById('cyberActions');
+const cyberJustifyEl = document.getElementById('cyberJustify');
+const cyberJustifyInput = document.getElementById('cyberJustifyInput');
+const cyberJustifySubmit = document.getElementById('cyberJustifySubmit');
+const cyberJustifyCancel = document.getElementById('cyberJustifyCancel');
+const cyberJustifyError = document.getElementById('cyberJustifyError');
+
+function resetCyberJustify() {
+  if (cyberActionsEl) cyberActionsEl.style.display = '';
+  if (cyberJustifyEl) cyberJustifyEl.style.display = 'none';
+  if (cyberJustifyInput) {
+    cyberJustifyInput.value = '';
+    cyberJustifyInput.disabled = false;
+  }
+  if (cyberJustifySubmit) {
+    cyberJustifySubmit.disabled = false;
+    cyberJustifySubmit.textContent = "Confirm — it's work";
+  }
+  if (cyberJustifyError) {
+    cyberJustifyError.style.display = 'none';
+    cyberJustifyError.textContent = '';
+  }
+}
+
+function showJustifyError(msg) {
+  if (!cyberJustifyError) return;
+  cyberJustifyError.textContent = msg;
+  cyberJustifyError.style.display = 'block';
+  // Retrigger shake by removing/re-adding the class.
+  cyberJustifyError.style.animation = 'none';
+  void cyberJustifyError.offsetWidth;
+  cyberJustifyError.style.animation = '';
+}
+
+async function submitWorkClaim(reason) {
+  const trimmed = (reason || '').trim();
+  if (cyberJustifySubmit) {
+    cyberJustifySubmit.disabled = true;
+    cyberJustifySubmit.textContent = 'Checking with local AI…';
+  }
+  if (cyberJustifyInput) cyberJustifyInput.disabled = true;
+  if (cyberJustifyError) cyberJustifyError.style.display = 'none';
+
+  let outcome = null;
+  try {
+    outcome = await invoke('submit_work_justification', { reason: trimmed });
+  } catch(e) {
+    outcome = { verdict: 'no_ai', message: null };
+    // Fall back to raw correct + allowlist locally so the click isn't a total no-op.
+    try { await invoke('correct_classification', { newStatus: 'on_task' }); } catch(_){}
+    if (currentDriftApp) {
+      try { await invoke('allow_app_this_session', { app: currentDriftApp }); } catch(_){}
+    }
+  }
+
+  if (outcome?.verdict === 'rejected') {
+    // Keep the overlay up, put the user back in the textarea to try again.
+    if (cyberJustifySubmit) {
+      cyberJustifySubmit.disabled = false;
+      cyberJustifySubmit.textContent = "Confirm — it's work";
+    }
+    if (cyberJustifyInput) cyberJustifyInput.disabled = false;
+    showJustifyError(outcome.message || 'That didn\'t land. Try again — or click "I\'ll get back to work."');
+    if (cyberJustifyInput) setTimeout(() => cyberJustifyInput.focus(), 0);
+    return;
+  }
+
+  // Accepted or no-ai fallback: backend applied correct/allowlist already, dismiss.
   hideCyberOverlay();
-  try { await invoke('correct_classification', { newStatus: 'on_task' }); } catch(e) {}
+  resetCyberJustify();
+}
+
+document.getElementById('cyberWorkBtn').addEventListener('click', () => {
+  if (cyberJustifyEl && cyberActionsEl) {
+    cyberActionsEl.style.display = 'none';
+    cyberJustifyEl.style.display = 'flex';
+    if (cyberJustifyInput) setTimeout(() => cyberJustifyInput.focus(), 0);
+  } else {
+    // Fallback path — no input UI in this window; submit as-is.
+    submitWorkClaim('');
+  }
 });
+if (cyberJustifySubmit) {
+  cyberJustifySubmit.addEventListener('click', () => submitWorkClaim(cyberJustifyInput?.value || ''));
+}
+if (cyberJustifyCancel) {
+  cyberJustifyCancel.addEventListener('click', () => resetCyberJustify());
+}
+if (cyberJustifyInput) {
+  cyberJustifyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      submitWorkClaim(cyberJustifyInput.value || '');
+    }
+  });
+}
+
 document.getElementById('cyberBackBtn').addEventListener('click', () => {
   hideCyberOverlay();
+  resetCyberJustify();
 });
 
 // Build warning ticker icons
@@ -1453,24 +1701,11 @@ async function setupListeners() {
     if (result?.state) {
       applySessionState(result.state);
       elapsedSec = result.state.elapsed_sec;
+      currentGoal = result.state.goal || '';
       renderSessionTimeline();
       renderSessionActivity();
       updateAdvPanel(result.state);
     }
-  });
-
-  // Drift detected — show cyberpunk overlay over entire desktop
-  await listen('drift-detected', async (event) => {
-    const { app, detail, elapsed_sec } = event.payload;
-    showCyberOverlay(app, detail, elapsed_sec);
-    try {
-      if (window.__TAURI__?.window) {
-        const win = window.__TAURI__.window.getCurrentWindow();
-        await win.setAlwaysOnTop(true);
-        await win.show();
-        await win.setFocus();
-      }
-    } catch(e) {}
   });
 
   // Session timer expired
@@ -1501,6 +1736,32 @@ async function setupListeners() {
       }
     });
   }
+}
+
+// Listeners for the dedicated drift_overlay window. Kept separate from setupListeners()
+// because the overlay window strips out .page-wrap on load, so applySessionState() would
+// crash on the many DOM elements that no longer exist. Only what the overlay actually
+// needs is registered here.
+async function setupOverlayListeners() {
+  // Track the current session goal so the overlay's sub-line can say "you said you'd
+  // be doing <goal>". Cheap: just pulls the string, no DOM touching.
+  await listen('session-tick-result', (event) => {
+    const s = event.payload?.state;
+    if (s) currentGoal = s.goal || '';
+  });
+
+  await listen('drift-detected', async (event) => {
+    const { app, detail, elapsed_sec } = event.payload;
+    showCyberOverlay(app, detail, elapsed_sec, currentGoal);
+    try {
+      if (window.__TAURI__?.window) {
+        const win = window.__TAURI__.window.getCurrentWindow();
+        await win.setAlwaysOnTop(true);
+        await win.show();
+        await win.setFocus();
+      }
+    } catch(e) {}
+  });
 }
 
 // ─── Count-up animation ──────────────────────────────────────────────
@@ -1555,7 +1816,13 @@ function showSummaryAnimated(summary) {
   if (summary?.point_breakdown) {
     const bd = summary.point_breakdown;
     const labels = document.querySelectorAll('#summaryBreakdown .s-fade:not(.v)');
-    if (labels[0]) labels[0].textContent = `${summary.duration_min} min × 50`;
+    // Label matches the actual formula (on-task time × 50/min prorated), not elapsed
+    // session length — otherwise "1 min × 50" shows a value of 0 and looks broken.
+    const onSec = summary.on_task_sec ?? 0;
+    const onMin = Math.floor(onSec / 60);
+    const onRem = onSec % 60;
+    const onLabel = onMin > 0 ? `${onMin}m ${onRem}s` : `${onRem}s`;
+    if (labels[0]) labels[0].textContent = `${onLabel} × 50/min`;
     if (labels[1]) labels[1].textContent = `${summary.drift_count} distraction${summary.drift_count === 1 ? '' : 's'} × −100`;
     if (labels[2]) labels[2].textContent = `streak bonus`;
     const streakLabel = document.querySelectorAll('#summaryBreakdown .v.up.s-fade');
@@ -1616,7 +1883,11 @@ function showSummaryAnimated(summary) {
   setTimeout(() => {
     totalRow.style.opacity = ''; totalRow.style.transform = '';
     totalRow.classList.add('slap'); shake();
-    if (stv && bp) countUp(stv, 0, bp.total, 800, '+');
+    // Sign prefix depends on the value now that totals can go negative: "+120", "−400", "0".
+    if (stv && bp) {
+      const prefix = bp.total > 0 ? '+' : (bp.total < 0 ? '−' : '');
+      countUp(stv, 0, Math.abs(bp.total), 800, prefix);
+    }
   }, d);
   d += 900;
 
