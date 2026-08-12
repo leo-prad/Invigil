@@ -49,6 +49,8 @@ pub struct Correction {
     pub original_status: String,
     pub corrected_status: String,
     pub timestamp: String,
+    // Free-text user reason from the "this is actually work" flow. None for silent overrides.
+    pub justification: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +215,11 @@ impl Database {
         let has_desc = conn.prepare("SELECT description FROM sessions LIMIT 1").is_ok();
         if !has_desc {
             let _ = conn.execute("ALTER TABLE sessions ADD COLUMN description TEXT NOT NULL DEFAULT ''", params![]);
+        }
+        // Nullable justification column for the "this is actually work" flow.
+        let has_just = conn.prepare("SELECT justification FROM corrections LIMIT 1").is_ok();
+        if !has_just {
+            let _ = conn.execute("ALTER TABLE corrections ADD COLUMN justification TEXT", params![]);
         }
         Ok(())
     }
@@ -496,9 +503,9 @@ impl Database {
     pub fn insert_correction(&self, correction: &Correction) -> SqlResult<()> {
         let conn = self.conn.lock();
         conn.execute(
-            "INSERT INTO corrections (id, interval_id, original_status, corrected_status, timestamp)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![correction.id, correction.interval_id, correction.original_status, correction.corrected_status, correction.timestamp],
+            "INSERT INTO corrections (id, interval_id, original_status, corrected_status, timestamp, justification)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![correction.id, correction.interval_id, correction.original_status, correction.corrected_status, correction.timestamp, correction.justification],
         )?;
         // Also update the interval itself
         conn.execute(

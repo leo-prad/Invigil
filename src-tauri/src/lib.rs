@@ -299,6 +299,100 @@ fn validate_goal(goal: String, description: String) -> Result<String, String> {
     Ok(llm::validate_goal(&goal, &description))
 }
 
+// --- Ollama commands ---
+
+#[tauri::command]
+fn get_ollama_status() -> Result<llm::OllamaStatus, String> {
+    Ok(llm::get_ollama_status())
+}
+
+#[tauri::command]
+fn try_launch_ollama() -> Result<bool, String> {
+    llm::try_launch_ollama()
+}
+
+// --- Justification command ---
+
+/// Outcome of running a "this is actually work" justification through the local AI.
+#[derive(serde::Serialize)]
+struct JustificationOutcome {
+    /// "accepted" (AI approved), "rejected" (AI called BS), "no_ai" (Ollama unreachable —
+    /// fell back to accepting).
+    verdict: String,
+    /// Snark line shown to the user on rejection. None on other verdicts.
+    message: Option<String>,
+}
+
+const REJECTION_LINES: &[&str] = &[
+    "Nice try. The AI didn't buy it either.",
+    "That excuse doesn't hold up. Back to work.",
+    "The local AI thinks you're lying. So do I.",
+    "Try again — but this time, with a reason that's actually true.",
+    "Even the AI is embarrassed for you.",
+    "That's not what this window is for and you know it.",
+    "Rejected. Give a real reason or get back to it.",
+    "The AI called your bluff. Wrap it up.",
+];
+
+/// Run the user's "this is actually work" text through the local AI. If plausible (or the
+/// AI is unavailable), apply the correction + allowlist server-side so the frontend
+/// doesn't have to make three separate calls. If implausible, save nothing and return a
+/// snarky rejection line for the overlay to display.
+#[tauri::command]
+fn submit_work_justification(
+    state: tauri::State<'_, AppState>,
+    reason: String,
+) -> Result<JustificationOutcome, String> {
+    let reason_trimmed = reason.trim().to_string();
+    if reason_trimmed.is_empty() {
+        return Ok(JustificationOutcome {
+            verdict: "rejected".into(),
+            message: Some("You have to actually explain. \"Trust me\" isn't a reason.".into()),
+        });
+    }
+
+    let session_state = state.session_mgr.get_state();
+    if !session_state.active {
+        return Ok(JustificationOutcome { verdict: "accepted".into(), message: None });
+    }
+
+    // Snapshot the window the user is defending — the same one that triggered the drift.
+    let window = monitor::get_active_window();
+    let app_name = monitor::extract_app_name(&window);
+
+    let verdict = llm::validate_work_justification(
+        &session_state.goal,
+        &session_state.description,
+        &app_name,
+        &window.title,
+        &reason_trimmed,
+    );
+
+    match verdict {
+        Some(llm::JustifyVerdict::Implausible) => {
+            // Don't save, don't allowlist — user has to try again (or click "back to work").
+            let idx = (session_state.elapsed_sec as usize) % REJECTION_LINES.len();
+            Ok(JustificationOutcome {
+                verdict: "rejected".into(),
+                message: Some(REJECTION_LINES[idx].into()),
+            })
+        }
+        Some(llm::JustifyVerdict::Plausible) => {
+            state.session_mgr.correct_current("on_task");
+            state.session_mgr.allow_app_for_session(&app_name);
+            state.session_mgr.record_work_justification(&reason_trimmed);
+            Ok(JustificationOutcome { verdict: "accepted".into(), message: None })
+        }
+        None => {
+            // AI unreachable — no way to verify, so give the benefit of the doubt.
+            state.session_mgr.correct_current("on_task");
+            state.session_mgr.allow_app_for_session(&app_name);
+            state.session_mgr.record_work_justification(&reason_trimmed);
+            Ok(JustificationOutcome { verdict: "no_ai".into(), message: None })
+        }
+    }
+}
+
 #[tauri::command]
 fn get_session_intervals(
     state: tauri::State<'_, AppState>,
@@ -355,6 +449,9 @@ pub fn run() {
             get_session_intervals,
             validate_goal,
             hide_drift_overlay,
+            get_ollama_status,
+            try_launch_ollama,
+            submit_work_justification,
         ])
         .setup(|app| {
             // Bring main window to front if found

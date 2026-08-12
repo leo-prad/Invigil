@@ -12,7 +12,12 @@ use uuid::Uuid;
 // Seconds to suppress the drift overlay after the user dismisses it, so long as they
 // stay on the same continuous off-task streak. A fresh streak (any on_task in between)
 // resets this to 0, so a brand-new distraction still nags immediately.
-const OVERLAY_COOLDOWN_SEC: i64 = 30;
+const OVERLAY_COOLDOWN_SEC: i64 = 15;
+
+// Max seconds a user is allowed to sit on Invigil itself before it counts as off_task.
+// Checking the dashboard / poking at settings shouldn't count as a distraction for a
+// few seconds, but camping on the app to avoid your real work should.
+const INVIGIL_GRACE_SEC: i64 = 30;
 
 // ─── Session state ───────────────────────────────────────────────────
 
@@ -42,6 +47,10 @@ pub struct SessionState {
     pub cpu_usage: f64,
     pub memory_mb: f64,
     pub session_allowlist: HashSet<String>,
+    // Continuous seconds spent focused on Invigil itself. Once above INVIGIL_GRACE_SEC,
+    // Invigil starts being classified as off_task like any other window. Reset when the
+    // user switches to any non-Invigil window.
+    pub invigil_focus_sec: i64,
 }
 
 impl Default for SessionState {
@@ -71,6 +80,7 @@ impl Default for SessionState {
             cpu_usage: 0.0,
             memory_mb: 0.0,
             session_allowlist: HashSet::new(),
+            invigil_focus_sec: 0,
         }
     }
 }
@@ -122,6 +132,9 @@ pub struct SessionManager {
     last_raw_status: Arc<Mutex<String>>,
     last_category: Arc<Mutex<String>>,
     last_window_title: Arc<Mutex<String>>,
+    // Process name of the last recorded interval — used to decide whether a new off_task
+    // interval on a different process should count as a fresh drift.
+    last_process_name: Arc<Mutex<String>>,
     // Tier 1 LLM availability (checked once at start)
     ollama_available: Arc<Mutex<bool>>,
     // Wall-clock timestamp of the last tick (for accurate elapsed time)
@@ -152,6 +165,7 @@ impl SessionManager {
             last_raw_status: Arc::new(Mutex::new(String::new())),
             last_category: Arc::new(Mutex::new(String::new())),
             last_window_title: Arc::new(Mutex::new(String::new())),
+            last_process_name: Arc::new(Mutex::new(String::new())),
             ollama_available: Arc::new(Mutex::new(ollama_up)),
             last_tick_at: Arc::new(Mutex::new(None)),
             #[cfg(windows)]
@@ -197,6 +211,7 @@ impl SessionManager {
         *self.last_raw_status.lock() = String::new();
         *self.last_category.lock() = String::new();
         *self.last_window_title.lock() = String::new();
+        *self.last_process_name.lock() = String::new();
         *self.idle_counter.lock() = 0;
         *self.last_tick_at.lock() = Some(Utc::now());
 
@@ -225,7 +240,7 @@ impl SessionManager {
         };
 
         let breakdown = calculate_points(
-            state.on_task_sec / 60,
+            state.on_task_sec,
             state.drift_count,
             &self.db,
         );
@@ -306,12 +321,16 @@ impl SessionManager {
         let (classification, _matched) = classifier::classify_tier0(&window, &profile);
         let category = classifier::categorize(&window);
 
-        // Check session-level allowlist (apps approved with "This is work" during this session)
+        // Check session-level allowlist (apps approved with "This is work" during this session).
+        // Invigil itself gets a fixed grace window instead of a blanket allow — camping on the
+        // dashboard/settings to avoid your real work should still count as drift.
+        let is_invigil_window = window.process_name.to_lowercase().contains("invigil");
+        let invigil_streak_sec = self.state.lock().invigil_focus_sec;
         let is_session_allowed = {
             let s = self.state.lock();
             s.session_allowlist.contains(&app_name.to_lowercase())
                 || s.session_allowlist.contains(&category.to_lowercase())
-                || window.process_name.to_lowercase().contains("invigil")
+                || (is_invigil_window && invigil_streak_sec < INVIGIL_GRACE_SEC)
         };
 
         let mut used_llm = false;
@@ -360,6 +379,14 @@ impl SessionManager {
         state.is_idle = is_currently_idle;
         state.elapsed_sec += delta;
         state.current_app = app_name.clone();
+
+        // Track continuous Invigil focus so the classifier can demote Invigil to off_task
+        // once the user camps on it too long. Reset the moment the user switches away.
+        if is_invigil_window {
+            state.invigil_focus_sec += delta;
+        } else {
+            state.invigil_focus_sec = 0;
+        }
 
         // Update telemetry counters
         if used_llm {
@@ -418,7 +445,6 @@ impl SessionManager {
         // never actually expires. See wiki/concepts/distraction-detection.md for the history.
         let mut drift_triggered = false;
         let prev_raw_status = self.last_raw_status.lock().clone();
-        let prev_effective_status = self.last_status.lock().clone();
 
         if status == "off_task" {
             if prev_raw_status != "off_task" {
@@ -452,12 +478,10 @@ impl SessionManager {
             }
         }
 
-        // Fire the overlay/penalty exactly once per drift streak: the tick where the
-        // *effective* status flips from on_task to off_task.
-        if state.current_status == "off_task" && prev_effective_status != "off_task" {
-            state.drift_count += 1;
-            drift_triggered = true;
-        }
+        // Drift counting: incremented once per new off_task interval below (when we
+        // actually open a new row in the activity log). The tick-level check that used
+        // to live here only fired on on_task→off_task flips, which undercounted vs.
+        // what the user sees in the activity log — every DRIFT row now = one drift.
 
         // Dismissing the overlay (see snooze_drift) suppresses re-showing it for
         // OVERLAY_COOLDOWN_SEC even though the underlying classification hasn't changed —
@@ -499,9 +523,22 @@ impl SessionManager {
             };
             let _ = self.db.insert_interval(&interval);
             *self.last_interval_id.lock() = Some(interval_id);
+
+            // Each new off_task interval = one drift, except when the same off_task app
+            // just has a title change (same process, still off_task — think a browser tab's
+            // title updating as you scroll). Matches "one DRIFT row = one drift" from the log.
+            let prev_proc = self.last_process_name.lock().clone();
+            if effective_status == "off_task"
+                && (prev_status != "off_task" || window.process_name != prev_proc)
+            {
+                state.drift_count += 1;
+                drift_triggered = true;
+            }
+
             *self.last_status.lock() = effective_status;
             *self.last_category.lock() = category;
             *self.last_window_title.lock() = window.title.clone();
+            *self.last_process_name.lock() = window.process_name.clone();
         }
 
         // Check if session timer expired
@@ -552,11 +589,31 @@ impl SessionManager {
                 original_status: state.current_status.clone(),
                 corrected_status: new_status.to_string(),
                 timestamp: now,
+                justification: None,
             };
             let _ = self.db.insert_correction(&correction);
         }
 
         *self.last_status.lock() = new_status.to_string();
+    }
+
+    /// Attach a free-text justification to the current interval as an on_task correction.
+    /// Called from the "This is actually work" flow after the user types a reason.
+    pub fn record_work_justification(&self, reason: &str) {
+        let interval_id = match self.last_interval_id.lock().clone() {
+            Some(id) => id,
+            None => return,
+        };
+        let current_status = self.state.lock().current_status.clone();
+        let correction = crate::db::Correction {
+            id: Uuid::new_v4().to_string(),
+            interval_id,
+            original_status: current_status,
+            corrected_status: "on_task".into(),
+            timestamp: Utc::now().to_rfc3339(),
+            justification: if reason.trim().is_empty() { None } else { Some(reason.trim().to_string()) },
+        };
+        let _ = self.db.insert_correction(&correction);
     }
 
     fn get_active_profile(&self) -> crate::db::Profile {
@@ -594,9 +651,11 @@ impl Default for crate::db::Settings {
 
 // ─── Points calculation ──────────────────────────────────────────────
 
-fn calculate_points(on_task_min: i64, drift_count: i64, db: &Database) -> PointBreakdown {
-    let base = on_task_min * 50;          // 50 pts per focused minute
-    let penalty = drift_count * -100;     // -100 per drift
+fn calculate_points(on_task_sec: i64, drift_count: i64, db: &Database) -> PointBreakdown {
+    // Prorated per second — 50 pts / focused-minute → 50/60 pts / focused-second.
+    // Integer math keeps the totals clean: 40 sec on-task → 33 pts, not 0.
+    let base = on_task_sec * 50 / 60;
+    let penalty = drift_count * -100;
     let streak = db.get_streak_info().map(|s| {
         if s.current >= 7 { 2.0 }
         else if s.current >= 3 { 1.5 }
@@ -606,11 +665,14 @@ fn calculate_points(on_task_min: i64, drift_count: i64, db: &Database) -> PointB
     let subtotal = base + penalty;
     let total = (subtotal as f64 * streak).round() as i64;
 
+    // No floor at 0: a session where drift penalties outweigh focused work should show a
+    // net-negative total so the number reflects what actually happened, not a papered-over
+    // "well at least you didn't lose anything."
     PointBreakdown {
         base_points: base,
         drift_penalty: penalty,
         streak_multiplier: streak,
-        total: total.max(0), // Never negative
+        total,
     }
 }
 
