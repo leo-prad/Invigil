@@ -152,10 +152,22 @@
         <section class="card">
           <div class="card-head">
             <div class="card-title" id="trendTitle">Attention span</div>
-            <button class="overall-btn" id="overallBtnTrend">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
-              Overall
-            </button>
+            <div class="card-head-actions">
+              <div class="stat-picker" id="trendStatPicker" tabindex="0" role="button" aria-haspopup="listbox" aria-expanded="false" title="Choose which stat to chart">
+                <span class="stat-picker-label" id="trendStatLabel">Focus time</span>
+                <svg class="stat-picker-caret" viewBox="0 0 12 8" width="10" height="7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1.5 6 6.5 11 1.5"/></svg>
+                <ul class="stat-picker-menu" id="trendStatMenu" role="listbox">
+                  <li role="option" data-value="focus_min" class="active">Focus time</li>
+                  <li role="option" data-value="on_task_pct">On-task %</li>
+                  <li role="option" data-value="sessions">Sessions/day</li>
+                  <li role="option" data-value="points">Points/day</li>
+                </ul>
+              </div>
+              <button class="overall-btn" id="overallBtnTrend">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+                Overall
+              </button>
+            </div>
           </div>
           <div class="trend-headline">
             <span class="trend-num" id="trendNum">0<span class="pct"> min</span></span>
@@ -472,7 +484,7 @@
       </div>
       <div class="summary-total-row" id="summaryTotalRow" style="opacity:0;transform:scale(0);">
         <span class="k">Total</span>
-        <span class="total-val" id="summaryTotalVal">+0</span>
+        <span class="total-val" id="summaryTotalVal">0</span>
       </div>
     </div>
 
