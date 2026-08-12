@@ -50,6 +50,9 @@ pub fn classify_tier0(window: &WindowInfo, profile: &Profile) -> (Classification
     let system_play = [
         "tiktok", "netflix", "hulu", "twitch.tv", "crunchyroll",
         "disney+", "hbo max", "prime video",
+        "youtube", "reddit", "instagram", "twitter", "facebook",
+        "snapchat", "pinterest", "tumblr", "9gag", "imgur",
+        "spotify", "soundcloud", "pandora",
     ];
     for app in &system_play {
         if title_lower.contains(app) {
