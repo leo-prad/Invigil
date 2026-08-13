@@ -34,6 +34,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
           Session
         </div>
+        <div class="nav-item" data-page="bounties">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2l2.4 5.6L20 8.4l-4 4 1 6.1L12 15.8 6.9 18.5l1-6.1-4-4 5.6-.8L12 2z"/></svg>
+          Bounties
+        </div>
         <div class="nav-item" data-page="settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.6V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.6-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.6-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3 1.7 1.7 0 001-1.6V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.6 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9 1.7 1.7 0 001.6 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.6 1z"/></svg>
           Settings
@@ -348,6 +352,28 @@
 
       </div>
       <!-- /page-session -->
+
+      <!-- ================= BOUNTIES PAGE ================= -->
+      <div class="page" id="page-bounties" style="display:none;">
+
+        <div class="top">
+          <div>
+            <div class="eyebrow"><span class="dot"></span> Daily bounties</div>
+            <h1 class="greeting">Three quests. <em>Pick your ground.</em></h1>
+            <div class="greeting-sub">Optional challenges from Professor Xeno. Complete them for bonus points — they refresh at midnight.</div>
+          </div>
+          <div class="bounty-refresh">
+            <div class="bounty-refresh-label">Refreshes in</div>
+            <div class="bounty-refresh-time" id="bountyCountdown">--:--:--</div>
+          </div>
+        </div>
+
+        <div class="bounty-grid" id="bountyGrid">
+          <!-- populated by JS -->
+        </div>
+
+      </div>
+      <!-- /page-bounties -->
 
       <!-- ================= SETTINGS PAGE ================= -->
       <div class="page" id="page-settings" style="display:none;">
