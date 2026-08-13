@@ -346,7 +346,7 @@ fn shallow_reason_check(reason: &str) -> Option<&'static str> {
         "want a rest", "chill for", "relax for",
     ];
     if BREAK_PATTERNS.iter().any(|p| lower.contains(p)) {
-        return Some("Breaks aren't work. If you need one, that's fine — click \"Just a break\" and take it, don't fake a reason.");
+        return Some("Breaks aren't work. If you need one, take it — don't fake a reason.");
     }
     // Pure-filler shorthand. Anything that reads like a shrug rather than an explanation.
     const FILLER_ONLY: &[&str] = &[
@@ -385,7 +385,7 @@ fn submit_work_justification(
     if reason_trimmed.is_empty() {
         return Ok(JustificationOutcome {
             verdict: "rejected".into(),
-            message: Some("You have to actually explain. \"Trust me\" isn't a reason.".into()),
+            message: Some("You didn't write anything. Explain how this window helps your task.".into()),
         });
     }
 
