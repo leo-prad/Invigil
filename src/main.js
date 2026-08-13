@@ -917,6 +917,7 @@ function wireBountyDebugOnce() {
   if (!btn) return;
   btn.addEventListener('click', async () => {
     try {
+      localStorage.removeItem('bountyCompletedSeen');
       await invoke('debug_reset_bounties');
       await refreshBounties();
     } catch (e) { console.warn('debug_reset_bounties failed:', e); }
@@ -957,6 +958,19 @@ function renderBountyGrid(bounties) {
   if (!bounties.length) {
     grid.innerHTML = '<div class="bounty-empty">No bounties yet — check back after midnight.</div>';
     return;
+  }
+  // Confetti on the first visit after a bounty flips to completed/claimed.
+  const seenKey = 'bountyCompletedSeen';
+  const seen = new Set(JSON.parse(localStorage.getItem(seenKey) || '[]'));
+  const freshWin = bounties.some(b =>
+    (b.status === 'completed' || b.status === 'claimed') && !seen.has(b.id)
+  );
+  if (freshWin) {
+    bounties.forEach(b => {
+      if (b.status === 'completed' || b.status === 'claimed') seen.add(b.id);
+    });
+    localStorage.setItem(seenKey, JSON.stringify([...seen]));
+    setTimeout(burstConfetti, 120);
   }
   // Sort easy → medium → hard so the difficulty ramps left-to-right / top-to-bottom.
   const sorted = [...bounties].sort((a, b) =>
@@ -1036,30 +1050,57 @@ function cardHtml(b, hasActive) {
  * gimmick — no exaggerated depth, no glare layer, no bouncy spring.
  */
 function attachTilt(card) {
-  const MAX_DEG = 4;
+  const MAX_DEG = 1.8;
   let raf = 0;
+  const rest = () => {
+    if (raf) cancelAnimationFrame(raf);
+    card.style.transform = '';
+  };
   const onMove = (e) => {
+    if (e.target.closest('button, a, .bounty-card-demo')) { rest(); return; }
     const rect = card.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;   // 0..1
-    const y = (e.clientY - rect.top) / rect.height;   // 0..1
-    const ry = (x - 0.5) * (MAX_DEG * 2);   // rotateY based on horizontal position
-    const rx = -(y - 0.5) * (MAX_DEG * 2);  // rotateX based on vertical position (negated for natural feel)
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    const ry = (x - 0.5) * (MAX_DEG * 2);
+    const rx = -(y - 0.5) * (MAX_DEG * 2);
     if (raf) cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => {
-      card.style.transform = `perspective(1200px) rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg) translateZ(0)`;
+      card.style.transform = `perspective(1400px) rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg) translateZ(0)`;
     });
   };
-  const onLeave = () => {
-    if (raf) cancelAnimationFrame(raf);
-    // Ease back to rest with a CSS transition, then clear the inline transform.
-    card.style.transition = 'transform 0.35s cubic-bezier(.2,.7,.3,1)';
-    card.style.transform = '';
-    setTimeout(() => { card.style.transition = ''; }, 400);
-  };
-  const onEnter = () => { card.style.transition = ''; };
+  const onLeave = rest;
   card.addEventListener('mousemove', onMove);
   card.addEventListener('mouseleave', onLeave);
-  card.addEventListener('mouseenter', onEnter);
+}
+
+function burstConfetti() {
+  const layer = document.createElement('div');
+  layer.className = 'confetti-layer';
+  document.body.appendChild(layer);
+  const colors = ['#c47f4a', '#c9a34a', '#5a7a44', '#3a4d33', '#a8b89a', '#8b6bb0'];
+  const count = 90;
+  const vw = window.innerWidth;
+  for (let i = 0; i < count; i++) {
+    const p = document.createElement('div');
+    p.className = 'confetti-piece';
+    const startX = Math.random() * vw;
+    const dx = (Math.random() - 0.5) * 260;
+    const rot = (Math.random() * 720 + 360) * (Math.random() < 0.5 ? -1 : 1);
+    const dur = 2.4 + Math.random() * 1.6;
+    const delay = Math.random() * 0.35;
+    const w = 6 + Math.random() * 8;
+    const h = 10 + Math.random() * 8;
+    p.style.left = startX + 'px';
+    p.style.width = w + 'px';
+    p.style.height = h + 'px';
+    p.style.background = colors[i % colors.length];
+    p.style.setProperty('--dx', dx + 'px');
+    p.style.setProperty('--rot', rot + 'deg');
+    p.style.animationDuration = dur + 's';
+    p.style.animationDelay = delay + 's';
+    layer.appendChild(p);
+  }
+  setTimeout(() => layer.remove(), 4500);
 }
 
 /**
@@ -1628,7 +1669,7 @@ async function submitWorkClaim(reason) {
       cyberJustifySubmit.textContent = "Confirm — it's work";
     }
     if (cyberJustifyInput) cyberJustifyInput.disabled = false;
-    showJustifyError(outcome.message || 'That didn\'t land. Try again — or click "Just a break" and take it.');
+    showJustifyError(outcome.message || 'That didn\'t land. Try again — or click "Get back to work".');
     if (cyberJustifyInput) setTimeout(() => cyberJustifyInput.focus(), 0);
     return;
   }
