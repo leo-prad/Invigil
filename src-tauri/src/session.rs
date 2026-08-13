@@ -32,6 +32,9 @@ pub struct SessionState {
     pub current_streak_sec: i64,    // current unbroken on-task run
     pub grace_remaining_sec: i64,   // countdown before flagging off-task
     pub is_idle: bool,
+    pub llm_calls: i64,
+    pub cpu_usage: f64,
+    pub memory_mb: f64,
     pub session_allowlist: HashSet<String>,
 }
 
@@ -57,6 +60,9 @@ impl Default for SessionState {
             current_streak_sec: 0,
             grace_remaining_sec: 0,
             is_idle: false,
+            llm_calls: 0,
+            cpu_usage: 0.0,
+            memory_mb: 0.0,
             session_allowlist: HashSet::new(),
         }
     }
@@ -110,6 +116,9 @@ pub struct SessionManager {
     ollama_available: Arc<Mutex<bool>>,
     // Wall-clock timestamp of the last tick (for accurate elapsed time)
     last_tick_at: Arc<Mutex<Option<chrono::DateTime<Utc>>>>,
+    // CPU tracking: previous kernel+user time (100-ns units) and wall instant
+    #[cfg(windows)]
+    last_cpu_time: Arc<Mutex<Option<(u64, std::time::Instant)>>>,
 }
 
 impl SessionManager {
@@ -134,6 +143,8 @@ impl SessionManager {
             last_window_title: Arc::new(Mutex::new(String::new())),
             ollama_available: Arc::new(Mutex::new(ollama_up)),
             last_tick_at: Arc::new(Mutex::new(None)),
+            #[cfg(windows)]
+            last_cpu_time: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -280,36 +291,24 @@ impl SessionManager {
                 || window.process_name.to_lowercase().contains("invigil")
         };
 
+        let mut used_llm = false;
         let status = if is_session_allowed {
             "on_task"
-        } else if !profile.allow_patterns.is_empty() {
-            // User explicitly specified tools for this session.
-            let title_lower = window.title.to_lowercase();
-            let proc_lower = window.process_name.to_lowercase();
-            let matches_allow = profile.allow_patterns.iter().any(|pat| {
-                let p = pat.to_lowercase();
-                title_lower.contains(&p) || proc_lower.contains(&p)
-            });
-
-            if matches_allow {
-                "on_task"
-            } else {
-                "off_task"
-            }
         } else {
             match classification {
-                Classification::OnTask => "on_task",
                 Classification::OffTask => "off_task",
+                Classification::OnTask => "on_task",
                 Classification::Ambiguous => {
                     let ollama_up = *self.ollama_available.lock();
                     if ollama_up {
+                        used_llm = true;
                         match llm::classify_ambiguous(&goal, &description, &app_name, &window.title) {
                             Some(llm::LlmVerdict::OnTask) => "on_task",
                             Some(llm::LlmVerdict::OffTask) => "off_task",
-                            None => "on_task",
+                            None => evaluate_relevance_heuristic(&goal, &description, &app_name, &window.title),
                         }
                     } else {
-                        "on_task"
+                        evaluate_relevance_heuristic(&goal, &description, &app_name, &window.title)
                     }
                 }
             }
@@ -338,6 +337,48 @@ impl SessionManager {
         state.is_idle = is_currently_idle;
         state.elapsed_sec += delta;
         state.current_app = app_name.clone();
+
+        // Update telemetry counters
+        if used_llm {
+            state.llm_calls += 1;
+        }
+        // Process memory + CPU via Win32
+        #[cfg(windows)]
+        {
+            use windows::Win32::Foundation::FILETIME;
+            use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+            use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+            unsafe {
+                let proc = GetCurrentProcess();
+
+                // Memory
+                let mut pmc = PROCESS_MEMORY_COUNTERS::default();
+                pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+                if GetProcessMemoryInfo(proc, &mut pmc, pmc.cb).is_ok() {
+                    state.memory_mb = pmc.WorkingSetSize as f64 / (1024.0 * 1024.0);
+                }
+
+                // CPU — compare kernel+user time delta to wall-clock delta
+                let mut creation = FILETIME::default();
+                let mut exit = FILETIME::default();
+                let mut kernel = FILETIME::default();
+                let mut user = FILETIME::default();
+                if GetProcessTimes(proc, &mut creation, &mut exit, &mut kernel, &mut user).is_ok() {
+                    let ft_to_u64 = |ft: FILETIME| (ft.dwHighDateTime as u64) << 32 | ft.dwLowDateTime as u64;
+                    let cpu_time = ft_to_u64(kernel) + ft_to_u64(user);
+                    let now_wall = std::time::Instant::now();
+                    let mut prev = self.last_cpu_time.lock();
+                    if let Some((prev_cpu, prev_wall)) = *prev {
+                        let cpu_delta = cpu_time.saturating_sub(prev_cpu) as f64;
+                        let wall_delta = now_wall.duration_since(prev_wall).as_secs_f64() * 10_000_000.0;
+                        if wall_delta > 0.0 {
+                            state.cpu_usage = (cpu_delta / wall_delta * 100.0).min(100.0);
+                        }
+                    }
+                    *prev = Some((cpu_time, now_wall));
+                }
+            }
+        }
         let mut final_detail = detail.clone();
         if is_currently_idle {
             final_detail = format!("(Away from controls) {}", detail);
@@ -526,6 +567,46 @@ fn calculate_points(on_task_min: i64, drift_count: i64, db: &Database) -> PointB
         base_points: base,
         drift_penalty: penalty,
         streak_multiplier: streak,
-        total: total.max(0), // never negative
+        total: total.max(0), // Never negative
+    }
+}
+
+/// Fallback relevance evaluation when local LLM is unpowered or unreachable.
+/// Compares window title and app name against goal & description keywords
+/// using whole-word matching to avoid false positives.
+fn evaluate_relevance_heuristic(goal: &str, description: &str, app_name: &str, window_title: &str) -> &'static str {
+    let combined_target = format!("{} {}", goal, description).to_lowercase();
+    let window_lower = format!("{} {}", app_name, window_title).to_lowercase();
+
+    let stop_words = [
+        "the", "and", "for", "with", "this", "that", "from", "studying", "doing",
+        "work", "task", "session", "about", "going", "will", "have", "some", "more",
+        "solve", "study", "just", "need", "want", "make", "like", "using", "used",
+        "try", "trying", "practice", "learn", "learning", "working", "getting",
+        "problems", "problem", "questions", "question", "exercises", "exercise",
+    ];
+    let goal_keywords: Vec<&str> = combined_target
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|w| w.len() >= 4 && !stop_words.contains(w))
+        .collect();
+
+    if goal_keywords.is_empty() {
+        return "off_task";
+    }
+
+    let window_words: Vec<&str> = window_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    let matches_goal = goal_keywords.iter().any(|kw| {
+        window_words.iter().any(|ww| *ww == *kw)
+    });
+
+    if matches_goal {
+        "on_task"
+    } else {
+        "off_task"
     }
 }
