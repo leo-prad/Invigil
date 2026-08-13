@@ -1334,11 +1334,10 @@
   .bounty-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 22px;
-    margin: 20px auto 0;
-    max-width: 1180px;
-    /* Perspective on the container so children's 3D tilts share a vanishing point. */
-    perspective: 1400px;
+    gap: 28px;
+    margin: 24px 0 0;
+    width: 100%;
+    perspective: 1600px;
   }
   @media (max-width: 900px) {
     .bounty-grid { grid-template-columns: 1fr; }
@@ -1348,16 +1347,14 @@
     position: relative;
     background: var(--paper);
     border: 1px solid var(--line);
-    border-radius: 16px;
-    padding: 26px 24px 22px;
+    border-radius: 18px;
+    padding: 34px 30px 28px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    min-height: 460px;
+    gap: 20px;
+    min-height: 620px;
     box-shadow: 0 3px 0 rgba(46,61,42,0.04), 0 2px 12px rgba(46,61,42,0.04);
-    /* Transform driven by JS tilt handler. Only shadow/border animate via CSS
-       so the tilt itself feels immediate. */
-    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+    transition: transform 0.18s cubic-bezier(.2,.7,.3,1), box-shadow 0.2s ease, border-color 0.2s ease;
     transform-style: preserve-3d;
     will-change: transform;
   }
@@ -1374,8 +1371,8 @@
 
   .bounty-badges { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .bounty-badge {
-    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.11em; font-weight: 600;
-    padding: 4px 9px; border-radius: 999px; border: 1px solid transparent;
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; font-weight: 600;
+    padding: 5px 11px; border-radius: 999px; border: 1px solid transparent;
   }
   .bounty-badge.diff-easy { background: color-mix(in oklab, var(--gold) 22%, var(--paper-2)); color: color-mix(in oklab, var(--gold) 55%, var(--ink)); border-color: color-mix(in oklab, var(--gold) 40%, transparent); }
   .bounty-badge.diff-medium { background: color-mix(in oklab, var(--terracotta) 20%, var(--paper-2)); color: color-mix(in oklab, var(--terracotta) 60%, var(--ink)); border-color: color-mix(in oklab, var(--terracotta) 38%, transparent); }
@@ -1383,19 +1380,19 @@
 
   .bounty-title {
     font-family: Charter, 'Iowan Old Style', Georgia, serif;
-    font-size: 22px; line-height: 1.18; color: var(--forest); font-weight: 600;
+    font-size: 30px; line-height: 1.16; color: var(--forest); font-weight: 600;
   }
-  .bounty-desc { font-size: 14px; line-height: 1.5; color: var(--ink-mid); flex: 1; }
+  .bounty-desc { font-size: 17px; line-height: 1.55; color: var(--ink-mid); flex: 1; }
 
   .bounty-reward {
-    display: flex; align-items: baseline; gap: 6px;
+    display: flex; align-items: baseline; gap: 8px;
     color: var(--moss-deep);
   }
   .bounty-reward .num {
-    font-family: Charter, Georgia, serif; font-size: 28px; font-weight: 600;
+    font-family: Charter, Georgia, serif; font-size: 40px; font-weight: 600;
     font-variant-numeric: tabular-nums;
   }
-  .bounty-reward .lbl { font-size: 12px; text-transform: uppercase; letter-spacing: 0.14em; }
+  .bounty-reward .lbl { font-size: 14px; text-transform: uppercase; letter-spacing: 0.14em; }
 
   .bounty-progress {
     display: flex; flex-direction: column; gap: 6px;
@@ -1413,8 +1410,8 @@
 
   .bounty-btn {
     align-self: stretch;
-    padding: 10px 14px; border-radius: 10px; border: 1px solid transparent;
-    font-size: 13px; font-weight: 600; letter-spacing: 0.02em;
+    padding: 14px 16px; border-radius: 12px; border: 1px solid transparent;
+    font-size: 15px; font-weight: 600; letter-spacing: 0.02em;
     cursor: pointer; transition: background 0.15s ease, transform 0.05s ease;
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   }
@@ -1446,22 +1443,27 @@
   }
 
   /* ── Bounty accept confirmation ─────────────────────────────────── */
-  .bounty-confirm-card { max-width: 460px; }
-  .bounty-confirm-target {
-    font-family: Charter, Georgia, serif; font-size: 15px;
-    color: var(--moss-deep); font-style: italic; margin-top: 2px;
+  .bounty-confirm-card {
+    max-width: 380px;
+    padding: 26px 26px 22px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .bounty-confirm-card h2 {
+    font-family: Charter, Georgia, serif;
+    font-size: 30px; line-height: 1.15; color: var(--forest); font-weight: 600;
+    margin: 0;
   }
   .bounty-confirm-body {
-    padding: 4px 4px 6px; font-size: 15px; color: var(--ink-mid); line-height: 1.5;
+    font-size: 16px; color: var(--ink-mid); line-height: 1.55;
   }
   .bounty-confirm-body em {
     font-style: normal; font-weight: 600; color: var(--forest);
   }
   .bounty-confirm-actions {
-    display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px;
+    display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px;
   }
   .bounty-confirm-actions .btn {
-    padding: 10px 20px; border-radius: 10px; font-size: 13.5px; font-weight: 600;
+    padding: 11px 22px; border-radius: 10px; font-size: 14.5px; font-weight: 600;
     cursor: pointer; border: 1px solid transparent;
     transition: background 0.15s ease, transform 0.05s ease, border-color 0.15s ease;
   }
@@ -1502,3 +1504,20 @@
     transition: background 0.12s ease, color 0.12s ease;
   }
   .bounty-card-demo:hover { background: var(--paper-2); color: var(--ink-mid); }
+
+  /* ── Confetti burst (bounty completed reveal) ───────────────────── */
+  .confetti-layer {
+    position: fixed; inset: 0; pointer-events: none;
+    overflow: hidden; z-index: 10000;
+  }
+  .confetti-piece {
+    position: absolute; top: -20px;
+    width: 10px; height: 14px; border-radius: 2px;
+    will-change: transform, opacity;
+    animation: confetti-fall linear forwards;
+  }
+  @keyframes confetti-fall {
+    0%   { transform: translate3d(0,-20px,0) rotate(0deg); opacity: 1; }
+    85%  { opacity: 1; }
+    100% { transform: translate3d(var(--dx, 0px), 105vh, 0) rotate(var(--rot, 720deg)); opacity: 0; }
+  }
