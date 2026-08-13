@@ -900,17 +900,141 @@ function navigateTo(page) {
   document.querySelectorAll('.nav-item[data-page]').forEach(i => i.classList.remove('active'));
   const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
   if (navItem) navItem.classList.add('active');
-  ['dashboard','session','settings'].forEach(p => {
+  ['dashboard','session','bounties','settings'].forEach(p => {
     const el = document.getElementById('page-' + p);
+    if (!el) return;
     el.style.display = p === page ? '' : 'none';
     if (p === page) { el.classList.remove('page-enter'); void el.offsetWidth; el.classList.add('page-enter'); }
   });
   if (page === 'session') renderSessionTimeline();
+  if (page === 'bounties') refreshBounties();
 }
 
 document.querySelectorAll('.nav-item[data-page]').forEach(item => {
   item.addEventListener('click', () => navigateTo(item.dataset.page));
 });
+
+// ─── Bounties ────────────────────────────────────────────────────────
+
+let bountyCountdownInterval = null;
+let bountyRefreshTargetTs = null;
+
+async function refreshBounties() {
+  const grid = document.getElementById('bountyGrid');
+  if (!grid) return;
+  try {
+    const payload = await invoke('get_bounties');
+    // Backend gives us seconds-until-midnight; convert to a wall-clock target so the
+    // JS timer keeps counting down accurately without another IPC round-trip per second.
+    bountyRefreshTargetTs = Date.now() + payload.seconds_until_refresh * 1000;
+    startBountyCountdown();
+    renderBountyGrid(payload.bounties || []);
+  } catch (e) {
+    console.warn('get_bounties failed:', e);
+    grid.innerHTML = '<div class="bounty-empty">Could not load bounties. Try again shortly.</div>';
+  }
+}
+
+function renderBountyGrid(bounties) {
+  const grid = document.getElementById('bountyGrid');
+  if (!grid) return;
+  if (!bounties.length) {
+    grid.innerHTML = '<div class="bounty-empty">No bounties yet — check back after midnight.</div>';
+    return;
+  }
+  grid.innerHTML = bounties.map(cardHtml).join('');
+  // Wire buttons after render (event delegation would work too; direct is simpler with 3 cards).
+  grid.querySelectorAll('[data-action="accept"]').forEach(b => {
+    b.addEventListener('click', () => acceptBounty(b.dataset.id));
+  });
+  grid.querySelectorAll('[data-action="claim"]').forEach(b => {
+    b.addEventListener('click', () => claimBounty(b.dataset.id));
+  });
+}
+
+function cardHtml(b) {
+  const kindLabel = b.kind === 'reinforcing' ? 'Reinforcing' : 'Exploratory';
+  const diffLabel = b.difficulty.charAt(0).toUpperCase() + b.difficulty.slice(1);
+  const pct = Math.max(0, Math.min(100, (b.progress || 0) * 100));
+  const showProgress = b.status === 'accepted' || b.status === 'completed' || b.status === 'claimed';
+  let btn;
+  if (b.status === 'available') {
+    btn = `<button class="bounty-btn accept" data-action="accept" data-id="${b.id}">Accept bounty</button>`;
+  } else if (b.status === 'accepted') {
+    btn = `<button class="bounty-btn in-progress" disabled>In progress…</button>`;
+  } else if (b.status === 'completed') {
+    btn = `<button class="bounty-btn claim" data-action="claim" data-id="${b.id}">Claim +${b.reward}</button>`;
+  } else {
+    btn = `<button class="bounty-btn claimed" disabled>Claimed ✓</button>`;
+  }
+  return `
+    <div class="bounty-card ${b.status}">
+      <div class="bounty-badges">
+        <span class="bounty-badge kind-${b.kind}">${kindLabel}</span>
+        <span class="bounty-badge diff-${b.difficulty}">${diffLabel}</span>
+      </div>
+      <div class="bounty-title">${escapeHtml(b.title)}</div>
+      <div class="bounty-desc">${escapeHtml(b.description)}</div>
+      <div class="bounty-reward">
+        <span class="num">+${b.reward}</span>
+        <span class="lbl">pts</span>
+      </div>
+      ${showProgress ? `
+        <div class="bounty-progress">
+          <div class="bounty-progress-track"><div class="bounty-progress-fill" style="width:${pct}%"></div></div>
+          <div class="bounty-progress-label">${escapeHtml(b.progress_label || '')}</div>
+        </div>` : ''}
+      ${btn}
+    </div>
+  `;
+}
+
+async function acceptBounty(id) {
+  try {
+    await invoke('accept_bounty', { id });
+    await refreshBounties();
+  } catch (e) {
+    console.warn('accept_bounty failed:', e);
+  }
+}
+
+async function claimBounty(id) {
+  try {
+    const reward = await invoke('claim_bounty', { id });
+    // Refresh dashboard totals silently so the points count elsewhere is current.
+    try { liveData = await invoke('get_dashboard_data'); } catch(e) {}
+    await refreshBounties();
+    console.log(`Bounty claimed: +${reward} pts`);
+  } catch (e) {
+    console.warn('claim_bounty failed:', e);
+  }
+}
+
+function startBountyCountdown() {
+  if (bountyCountdownInterval) return;
+  const tick = () => {
+    const el = document.getElementById('bountyCountdown');
+    if (!el || bountyRefreshTargetTs == null) return;
+    let secs = Math.max(0, Math.round((bountyRefreshTargetTs - Date.now()) / 1000));
+    if (secs === 0) {
+      // Midnight hit — pull the fresh pool. Backend will regenerate today's row.
+      refreshBounties();
+      return;
+    }
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    el.textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  };
+  tick();
+  bountyCountdownInterval = setInterval(tick, 1000);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[c]);
+}
 
 // ─── Session timeline ────────────────────────────────────────────────
 
@@ -1043,6 +1167,9 @@ document.getElementById('summaryDoneBtn').addEventListener('click', async () => 
   resetSummaryAnimation();
   // Refresh dashboard data with await so trends and tiles render latest data
   try { liveData = await invoke('get_dashboard_data'); } catch(e) {}
+  // Bounty progress recomputes server-side on end_session, but if the user's already on
+  // the bounties page (they aren't here, but for future navigation) it's cheap to prime.
+  try { await invoke('get_bounties'); } catch(e) {}
   navigateTo('dashboard');
   setMode({ mode: 'overall', start: null, end: null });
   updateGreeting();

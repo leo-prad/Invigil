@@ -1,3 +1,4 @@
+mod bounties;
 mod classifier;
 mod db;
 mod llm;
@@ -105,6 +106,13 @@ fn end_session(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<sess
     }
 
     let summary = state.session_mgr.stop();
+
+    // Any accepted bounty may have flipped to `completed` after this session — recompute
+    // so the UI shows a Claim button as soon as they open Bounties again.
+    let today = bounties::local_today();
+    bounties::ensure_today_pool(&state.db);
+    bounties::refresh_progress(&state.db, &today);
+
     Ok(summary)
 }
 
@@ -430,6 +438,37 @@ fn submit_work_justification(
     }
 }
 
+// --- Bounty commands ---
+
+#[derive(serde::Serialize)]
+struct BountiesPayload {
+    bounties: Vec<db::Bounty>,
+    /// Local seconds remaining until midnight, when the pool refreshes.
+    seconds_until_refresh: i64,
+}
+
+#[tauri::command]
+fn get_bounties(state: tauri::State<'_, AppState>) -> Result<BountiesPayload, String> {
+    let today = bounties::local_today();
+    bounties::ensure_today_pool(&state.db);
+    bounties::refresh_progress(&state.db, &today);
+    let list = state.db.get_bounties_for_day(&today).map_err(|e| e.to_string())?;
+    Ok(BountiesPayload {
+        bounties: list,
+        seconds_until_refresh: bounties::seconds_until_local_midnight(),
+    })
+}
+
+#[tauri::command]
+fn accept_bounty(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    bounties::accept(&state.db, &id)
+}
+
+#[tauri::command]
+fn claim_bounty(state: tauri::State<'_, AppState>, id: String) -> Result<i64, String> {
+    bounties::claim(&state.db, &id)
+}
+
 #[tauri::command]
 fn get_session_intervals(
     state: tauri::State<'_, AppState>,
@@ -489,6 +528,10 @@ pub fn run() {
             get_ollama_status,
             try_launch_ollama,
             submit_work_justification,
+            // Bounties
+            get_bounties,
+            accept_bounty,
+            claim_bounty,
         ])
         .setup(|app| {
             // Bring main window to front if found
