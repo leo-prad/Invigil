@@ -851,6 +851,15 @@ impl Database {
         Ok(())
     }
 
+    pub fn delete_bounties_for_day(&self, day: &str) -> SqlResult<()> {
+        let conn = self.conn.lock();
+        conn.execute("DELETE FROM bounties WHERE day = ?1", params![day])?;
+        // Also drop any ledger rows tied to those bounties so a reset doesn't leave
+        // stranded points behind. Bounty ledger rows use session_id = "bounty:<uuid>".
+        conn.execute("DELETE FROM points_ledger WHERE session_id LIKE 'bounty:%'", params![])?;
+        Ok(())
+    }
+
     pub fn get_bounty(&self, id: &str) -> SqlResult<Option<Bounty>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(

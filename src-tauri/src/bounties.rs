@@ -418,6 +418,34 @@ pub fn claim(db: &Database, id: &str) -> Result<i64, String> {
     Ok(b.reward)
 }
 
+/// **Demo helper.** Force an accepted bounty to `completed` so the Claim button
+/// appears without having to actually meet the criterion via real sessions.
+/// TODO(temp): remove once demo mode is retired.
+pub fn debug_complete(db: &Database, id: &str) -> Result<(), String> {
+    let mut b = match db.get_bounty(id) {
+        Ok(Some(b)) => b,
+        Ok(None) => return Err("Bounty not found".into()),
+        Err(e) => return Err(e.to_string()),
+    };
+    if b.status == "claimed" { return Err("Already claimed".into()); }
+    b.status = "completed".into();
+    b.progress = 1.0;
+    b.progress_label = "Demo complete".into();
+    b.completed_at = Some(Utc::now().to_rfc3339());
+    db.update_bounty(&b).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// **Demo helper.** Wipe today's pool + any bounty ledger rows and regenerate
+/// three fresh bounties on the next `get_bounties` call. Lets the user re-experience
+/// the accept flow without waiting for midnight. TODO(temp): remove with demo mode.
+pub fn debug_reset(db: &Database) -> Result<(), String> {
+    let day = local_today();
+    db.delete_bounties_for_day(&day).map_err(|e| e.to_string())?;
+    ensure_today_pool(db);
+    Ok(())
+}
+
 pub fn accept(db: &Database, id: &str) -> Result<(), String> {
     let mut b = match db.get_bounty(id) {
         Ok(Some(b)) => b,
@@ -425,6 +453,13 @@ pub fn accept(db: &Database, id: &str) -> Result<(), String> {
         Err(e) => return Err(e.to_string()),
     };
     if b.status != "available" { return Err("Cannot accept this bounty".into()); }
+    // One at a time: refuse if any other bounty on the same day is already in
+    // the `accepted` state. Completed / claimed / available are all fine — only
+    // an active-in-progress bounty blocks a new acceptance.
+    let siblings = db.get_bounties_for_day(&b.day).unwrap_or_default();
+    if siblings.iter().any(|x| x.id != b.id && x.status == "accepted") {
+        return Err("Only one bounty at a time — finish or claim the active one first.".into());
+    }
     b.status = "accepted".into();
     b.accepted_at = Some(Utc::now().to_rfc3339());
     db.update_bounty(&b).map_err(|e| e.to_string())?;
