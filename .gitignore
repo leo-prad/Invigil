@@ -8,4 +8,9 @@ node_modules/
 .DS_Store
 Thumbs.db
 .claude/
-*.log
+.obsidian/
+
+# Wiki and personal files
+raw/
+wiki/
+vs-code-custom.css
