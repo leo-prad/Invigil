@@ -347,6 +347,16 @@
   .trend-sub { font-size: 12px; color: var(--ink-muted); }
   .trend-viz { flex: 1; min-height: 150px; position: relative; margin-top: 10px; }
   .trend-viz svg.chart-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .trend-viz .chart-inner { position: absolute; }
+  .trend-viz .y-tick-labels {
+    position: absolute; inset: 0 auto 0 0; pointer-events: none;
+  }
+  .trend-viz .y-tick-label {
+    position: absolute; right: 6px; transform: translateY(-50%);
+    font-family: var(--font-sans); font-size: 12px;
+    color: var(--ink-muted); font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
   .trend-labels { display: flex; justify-content: space-between; margin-top: 6px; font-size: 9.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
   .energy-icon {
     position: absolute; top: 4%; width: 15px; height: 15px;
@@ -368,6 +378,9 @@
     display: inline-flex; align-items: baseline; gap: 3px;
   }
   .tile .v small { font-family: var(--font-sans); font-size: 12px; color: var(--ink-muted); letter-spacing: 0; font-weight: 400; }
+  .tile .v .trend-arrow { margin-left: 6px; align-self: center; }
+  .tile .v .trend-arrow.up { color: var(--moss-deep); }
+  .tile .v .trend-arrow.down { color: var(--clay); }
   .tile .sub { font-size: 10.5px; color: var(--ink-muted); margin-top: 2px; }
   .tile .sub .up { color: var(--moss-deep); font-weight: 600; }
   .tile .sub .down { color: var(--clay); font-weight: 600; }
@@ -439,10 +452,10 @@
   }
   .insight-headline em { font-style: italic; color: var(--moss-deep); }
   .insight-lead { color: var(--ink-mid); font-size: 13px; line-height: 1.5; margin-bottom: 18px; }
-  .insight-list { display: flex; flex-direction: column; gap: 14px; }
+  .insight-list { display: flex; flex-direction: column; gap: 18px; }
   .insight-item {
-    display: grid; grid-template-columns: 30px 1fr; gap: 12px; align-items: flex-start;
-    font-size: 12.5px; line-height: 1.4; color: var(--ink-mid);
+    display: grid; grid-template-columns: 28px 1fr; gap: 14px; align-items: center;
+    font-size: 13px; line-height: 1.45; color: var(--ink-mid);
   }
   .insight-item .ico {
     width: 26px; height: 26px; border-radius: 8px;
@@ -473,6 +486,10 @@
     text-wrap: balance;
   }
   .session-goal em { font-style: italic; color: var(--moss-deep); }
+  .session-goal-tag {
+    margin-top: 8px; font-family: var(--font-sans); font-size: 13px; font-weight: 400;
+    color: var(--ink-muted); line-height: 1.4; letter-spacing: 0;
+  }
   .session-goal-meta { color: var(--ink-muted); font-size: 13px; display: flex; gap: 12px; align-items: center; }
   .session-goal-meta .sep { color: var(--ink-dim); }
 
@@ -979,17 +996,17 @@
   .activity-list::-webkit-scrollbar-thumb { background: var(--moss); border-radius: 999px; }
   .activity-list::-webkit-scrollbar-thumb:hover { background: var(--moss-deep); }
   .activity-row {
-    display: grid; grid-template-columns: 25px 1fr auto auto; align-items: center; gap: 10px;
+    display: grid; grid-template-columns: 28px 1fr auto auto; align-items: center; gap: 12px;
     padding: 8px 10px; border-radius: 10px; background: var(--paper-2);
     border: 1px solid var(--line-soft); font-size: 12.5px;
     content-visibility: auto;
-    contain-intrinsic-size: auto 43px;
+    contain-intrinsic-size: auto 46px;
   }
   .activity-row .a-icon {
-    width: 25px; height: 25px; border-radius: 6px;
+    width: 28px; height: 28px; border-radius: 7px;
     display: grid; place-items: center; font-size: 10px; font-weight: 600; color: #fff;
-    box-shadow: inset 0 -3px 6px rgba(0,0,0,0.15);
   }
+  .activity-row .a-icon.no-icon { box-shadow: inset 0 -3px 6px rgba(0,0,0,0.15); }
   .activity-row .a-name { color: var(--ink); font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .activity-row .a-detail { font-weight: 400; color: var(--ink-muted); font-size: 11px; }
   .activity-row .a-dur { font-family: var(--font-mono); font-size: 11px; color: var(--ink-muted); }

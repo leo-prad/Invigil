@@ -145,9 +145,12 @@ pub fn validate_work_justification(
          PLAUSIBLE\n\
          or\n\
          IMPLAUSIBLE: <one short sentence explaining why, addressing the student directly as \"you\">\n\n\
+         If the reason is about wanting a break, resting, or relaxing, remind the student that the \
+         \"Just a break\" button is for that — this dialog is only for claims that this window is \
+         actual work.\n\n\
          Examples:\n\
          IMPLAUSIBLE: \"cuz\" isn't a reason — you need to actually name what this window helps with.\n\
-         IMPLAUSIBLE: Taking a break isn't work; it's the thing you're avoiding your work with.\n\
+         IMPLAUSIBLE: If you just want a break, click \"Just a break\" — no need to pretend Discord is math.\n\
          IMPLAUSIBLE: You said you're doing math but this is a music video, not a lecture.\n\
          PLAUSIBLE"
     );

@@ -93,6 +93,7 @@ pub struct StreakInfo {
 pub struct DistractionStat {
     pub name: String,
     pub minutes: i64,
+    pub seconds: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -621,10 +622,20 @@ impl Database {
     pub fn get_streak_info(&self) -> SqlResult<StreakInfo> {
         let conn = self.conn.lock();
 
-        // Current streak: count consecutive days back from today
+        // Current streak: count consecutive focused days ending at the most recent focused day.
+        // If today has no row yet (user hasn't started a session today), start from yesterday
+        // so the streak still counts what they built up. Only breaks when a whole day is skipped.
         let today = Utc::now().format("%Y-%m-%d").to_string();
         let mut current = 0i64;
         let mut check_date = chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d").unwrap_or_default();
+        let today_focused: i64 = conn.query_row(
+            "SELECT COALESCE(focused, 0) FROM streaks WHERE date=?1",
+            params![check_date.format("%Y-%m-%d").to_string()],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        if today_focused == 0 {
+            check_date -= chrono::Duration::days(1);
+        }
         loop {
             let ds = check_date.format("%Y-%m-%d").to_string();
             let focused: i64 = conn.query_row(
@@ -706,14 +717,16 @@ impl Database {
         let conn = self.conn.lock();
         let week_ago = (Utc::now() - chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
         let mut stmt = conn.prepare(
-            "SELECT category, COUNT(*) * 5 / 60 as mins FROM intervals
+            "SELECT category, COUNT(*) * 5 as secs FROM intervals
              WHERE status='off_task' AND start_ts >= ?1
-             GROUP BY category ORDER BY mins DESC LIMIT 10"
+             GROUP BY category ORDER BY secs DESC LIMIT 10"
         )?;
         let rows = stmt.query_map(params![week_ago], |row| {
+            let secs: i64 = row.get(1)?;
             Ok(DistractionStat {
                 name: row.get(0)?,
-                minutes: row.get(1)?,
+                minutes: secs / 60,
+                seconds: secs,
             })
         })?;
         rows.collect()

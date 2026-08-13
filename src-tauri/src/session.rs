@@ -93,6 +93,11 @@ pub struct TickResult {
     pub drift_app: String,
     pub drift_detail: String,
     pub session_expired: bool,   // true = timer ran out
+    // True when the focused window is the drift overlay itself. Backend still keeps
+    // overlay_active so time-on-overlay counts as off_task, but lib.rs suppresses the
+    // drift-detected re-emit — otherwise the overlay re-triggers its own shake/roast/reset
+    // every ~5s, which the user perceives as a second warning stacking on top.
+    pub on_overlay: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,16 +330,27 @@ impl SessionManager {
         // Invigil itself gets a fixed grace window instead of a blanket allow — camping on the
         // dashboard/settings to avoid your real work should still count as drift.
         let is_invigil_window = window.process_name.to_lowercase().contains("invigil");
+        // The drift overlay itself is an Invigil window (same process). Detect it specifically
+        // by the window title set in tauri.conf.json ("Invigil Alert") so we can treat "staring
+        // at the warning" as off-task time — otherwise the Invigil grace would give the user
+        // a free 30-second pass every time they stalled on the overlay instead of switching
+        // back to work. Also used below to suppress re-emitting drift-detected each tick.
+        let is_drift_overlay_window = window.title == "Invigil Alert";
         let invigil_streak_sec = self.state.lock().invigil_focus_sec;
         let is_session_allowed = {
             let s = self.state.lock();
-            s.session_allowlist.contains(&app_name.to_lowercase())
-                || s.session_allowlist.contains(&category.to_lowercase())
-                || (is_invigil_window && invigil_streak_sec < INVIGIL_GRACE_SEC)
+            // Overlay window never gets the allowlist / Invigil grace — it's always off-task.
+            !is_drift_overlay_window && (
+                s.session_allowlist.contains(&app_name.to_lowercase())
+                    || s.session_allowlist.contains(&category.to_lowercase())
+                    || (is_invigil_window && invigil_streak_sec < INVIGIL_GRACE_SEC)
+            )
         };
 
         let mut used_llm = false;
-        let status = if is_session_allowed {
+        let status = if is_drift_overlay_window {
+            "off_task"
+        } else if is_session_allowed {
             "on_task"
         } else {
             match classification {
@@ -382,9 +398,11 @@ impl SessionManager {
 
         // Track continuous Invigil focus so the classifier can demote Invigil to off_task
         // once the user camps on it too long. Reset the moment the user switches away.
-        if is_invigil_window {
+        // Excluding the overlay window here so time spent staring at the drift warning
+        // doesn't count toward — or reset — the main-app grace.
+        if is_invigil_window && !is_drift_overlay_window {
             state.invigil_focus_sec += delta;
-        } else {
+        } else if !is_drift_overlay_window {
             state.invigil_focus_sec = 0;
         }
 
@@ -446,10 +464,17 @@ impl SessionManager {
         let mut drift_triggered = false;
         let prev_raw_status = self.last_raw_status.lock().clone();
 
+        // Minimum universal drift-onset grace. Even if the user's grace_period_sec setting is 0,
+        // give every drift-onset a small buffer so brief app switches (open File Explorer, grab
+        // a file, come back) don't count as drift. File Explorer / Task Manager / Snipping Tool
+        // etc. are further whitelisted at Tier 0 as OnTask — this constant is the catch-all for
+        // everything else the classifier flags.
+        const MIN_DRIFT_ONSET_GRACE_SEC: i64 = 10;
+
         if status == "off_task" {
             if prev_raw_status != "off_task" {
                 // Just started drifting — begin grace period
-                state.grace_remaining_sec = self.grace_period_sec;
+                state.grace_remaining_sec = self.grace_period_sec.max(MIN_DRIFT_ONSET_GRACE_SEC);
             } else if state.grace_remaining_sec > 0 {
                 state.grace_remaining_sec -= delta;
             }
@@ -555,6 +580,7 @@ impl SessionManager {
             drift_app: app_name,
             drift_detail: detail,
             session_expired,
+            on_overlay: is_drift_overlay_window,
         };
 
         Some(result)

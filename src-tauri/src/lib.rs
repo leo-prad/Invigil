@@ -56,9 +56,12 @@ fn start_session(
             if let Some(result) = app_state.session_mgr.tick() {
                 let _ = app_clone.emit("session-tick-result", &result);
 
-                if result.overlay_active {
+                // Skip when the user is already parked on the overlay itself — the window is
+                // visible, `showCyberOverlay` would re-run its shake / roast-line pick / justify
+                // reset, which reads as a second warning stacking on top of the first.
+                if result.overlay_active && !result.on_overlay {
                     // Re-shown/re-focused every off-task tick, not just the first — dismissing the
-                    // overlay ("I'll get back to work") without actually switching away brings it
+                    // overlay ("Just a break") without actually switching away brings it
                     // right back on the next ~5s poll instead of going quiet for the rest of the drift.
                     if let Some(drift_win) = app_clone.get_webview_window("drift_overlay") {
                         // Size overlay to cover the entire monitor
@@ -335,7 +338,7 @@ fn shallow_reason_check(reason: &str) -> Option<&'static str> {
         "want a rest", "chill for", "relax for",
     ];
     if BREAK_PATTERNS.iter().any(|p| lower.contains(p)) {
-        return Some("Breaks aren't work. If you need one, that's fine — click \"I'll get back to work\" and take it, don't lie about it.");
+        return Some("Breaks aren't work. If you need one, that's fine — click \"Just a break\" and take it, don't fake a reason.");
     }
     // Pure-filler shorthand. Anything that reads like a shrug rather than an explanation.
     const FILLER_ONLY: &[&str] = &[

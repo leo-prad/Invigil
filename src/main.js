@@ -169,22 +169,80 @@ async function checkOllamaOnLoad() {
 
 // ─── Greeting ────────────────────────────────────────────────────────
 
-function updateGreeting() {
-  const h = new Date().getHours();
-  let period = 'morning';
-  if (h >= 12 && h < 17) period = 'afternoon';
-  else if (h >= 17) period = 'evening';
+// Pick a warm, hour-aware greeting for the dashboard headline. Picks a bucket by wall-clock
+// hour, then picks a line inside the bucket by day-of-month so the same day always renders
+// the same line (no flicker between polls) but the collection rotates day to day.
+function pickTimeGreeting() {
+  const now = new Date();
+  const h = now.getHours();
+  const doy = now.getDate();  // day-of-month drives rotation
+  const emph = t => `<em>${t}</em>`;
+  const wee   = [`Wee hours, ${emph('Leo?')}`, `Up already — or ${emph('still up?')}`, `The world's asleep, ${emph('Leo.')}`];
+  const early = [`Early bird, ${emph('Leo.')}`, `Dawn patrol, ${emph('Leo.')}`, `Sunrise scholar, ${emph('Leo.')}`];
+  const morn  = [`Good morning, Leo — ${emph("let's lock in.")}`, `Rise and grind, ${emph('Leo.')}`, `Morning shift, ${emph('Leo.')}`];
+  const noon  = [`Midday, Leo — ${emph('halfway there.')}`, `Lunch-hour lock-in, ${emph('Leo?')}`, `Afternoon push, ${emph('Leo.')}`];
+  const aft   = [`Good afternoon, Leo — ${emph("stay sharp.")}`, `The 3pm slog, ${emph('Leo.')}`, `Afternoon focus, ${emph('Leo.')}`];
+  const eve   = [`Good evening, Leo — ${emph("still going?")}`, `Golden-hour grind, ${emph('Leo.')}`, `Evening session, ${emph('Leo.')}`];
+  const night = [`Night owl, ${emph('Leo?')}`, `Burning the midnight oil, ${emph('Leo.')}`, `Late-night lock-in, ${emph('Leo.')}`];
+  let pool;
+  if      (h < 5)  pool = wee;
+  else if (h < 8)  pool = early;
+  else if (h < 12) pool = morn;
+  else if (h < 14) pool = noon;
+  else if (h < 17) pool = aft;
+  else if (h < 21) pool = eve;
+  else             pool = night;
+  return pool[doy % pool.length];
+}
 
+// Warm session-page headline. Extracts a subject keyword from the goal / description and
+// wraps it in a "you've got this" phrasing so the header doesn't read as raw task instructions.
+// If no subject keyword lands, falls back to a generic warm line + the raw goal underneath.
+function pickSessionGreeting(goal, description) {
+  const text = `${goal || ''} ${description || ''}`.toLowerCase();
+  const subjects = [
+    { re: /\b(calc(ulus)?|derivative|integral|integ)/, label: 'calc' },
+    { re: /\b(algebra|linear algebra|matrix|matrices)/, label: 'algebra' },
+    { re: /\b(geometry|trig|trigonometry|proof)/, label: 'geometry' },
+    { re: /\b(math|chapter\s*\d|problem\s*set|homework|hw)/, label: 'math' },
+    { re: /\b(phys(ics)?|kinematics|mechanics)/, label: 'physics' },
+    { re: /\b(chem(istry)?|reaction|stoichiometry|molar)/, label: 'chem' },
+    { re: /\b(bio(logy)?|cell|mitosis|enzyme|dna)/, label: 'bio' },
+    { re: /\b(hist(ory)?|civil war|revolution|world war)/, label: 'history' },
+    { re: /\b(essay|paper|writing|thesis|draft)/, label: 'your writing' },
+    { re: /\b(code|coding|program|dev|leetcode|debug|feature)/, label: 'code' },
+    { re: /\b(spanish|french|german|japanese|language|vocab)/, label: 'language' },
+    { re: /\b(read(ing)?|book|novel|chapter\s+of)/, label: 'reading' },
+    { re: /\b(study|review|revise|exam|test|midterm|final)/, label: 'study' },
+  ];
+  const emph = t => `<em>${t}</em>`;
+  const goalSafe = (goal || '').replace(/</g, '&lt;').slice(0, 140);
+  for (const s of subjects) {
+    if (s.re.test(text)) {
+      const openers = [
+        `Back into ${emph(s.label)}?`,
+        `Locked in on ${emph(s.label)}.`,
+        `Deep work on ${emph(s.label)} — you've got this.`,
+        `${emph(s.label.charAt(0).toUpperCase() + s.label.slice(1))} time.`,
+      ];
+      const doy = new Date().getDate();
+      return `${openers[doy % openers.length]}<div class="session-goal-tag">${goalSafe}</div>`;
+    }
+  }
+  // No keyword landed — still warmer than raw goal.
+  return `Session in progress — <em>focus mode.</em><div class="session-goal-tag">${goalSafe}</div>`;
+}
+
+function updateGreeting() {
   const streakDays = liveData?.streak?.current ?? 0;
   const greeting = document.querySelector('h1.greeting');
   const sub = document.querySelector('.greeting-sub');
   if (!greeting || !sub) return;
 
+  greeting.innerHTML = pickTimeGreeting();
   if (streakDays > 1) {
-    greeting.innerHTML = `Good ${period}, Leo — <em>you're on a roll.</em>`;
     sub.textContent = `${streakDays} day${streakDays === 1 ? '' : 's'} locked in. ${formatDateNice(TODAY)} · no session running.`;
   } else {
-    greeting.innerHTML = `Good ${period}, Leo — <em>let's lock in.</em>`;
     sub.textContent = `${formatDateNice(TODAY)} · no session running.`;
   }
 
@@ -213,26 +271,60 @@ function updateGreeting() {
   updateStatTiles();
 }
 
+// Tiny inline arrow SVGs shown next to a tile's headline number to indicate direction of
+// change vs. the compare-baseline. `arrowSvg('up')` renders green up-arrow, 'down' is orange.
+// Kept small (11px) so it sits beside the serif number without stealing focus.
+function arrowSvg(dir) {
+  if (dir !== 'up' && dir !== 'down') return '';
+  const cls = dir === 'up' ? 'trend-arrow up' : 'trend-arrow down';
+  // Up arrow is a chevron pointing up; down is the flipped variant.
+  const path = dir === 'up' ? 'M3 8 L7 4 L11 8' : 'M3 4 L7 8 L11 4';
+  return `<svg class="${cls}" viewBox="0 0 14 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="${path}"/></svg>`;
+}
+
+// Given current and baseline numbers, return 'up' | 'down' | null. Threshold guards against
+// noise — if the delta is within 3% of the baseline (or ±1 for tiny values) we call it flat.
+function trendDir(cur, prev) {
+  if (prev == null || cur == null) return null;
+  const diff = cur - prev;
+  const threshold = Math.max(1, Math.abs(prev) * 0.03);
+  if (diff > threshold) return 'up';
+  if (diff < -threshold) return 'down';
+  return null;
+}
+
 function updateStatTiles() {
   if (!liveData) return;
   const tiles = document.querySelectorAll('.tile');
   if (tiles.length < 4) return;
 
+  // Trend baselines come from the 14-day series. This-week = last 7 vs. previous 7,
+  // on-task avg = today vs. 14-day mean, points = current session sign (no history yet).
+  const t14 = liveData.trend_14d || [];
+  const last7 = t14.slice(-7);
+  const prev7 = t14.slice(-14, -7);
+  const sum = arr => arr.reduce((s, d) => s + (d.total_minutes || 0), 0);
+  const avgPctOf = arr => arr.length ? arr.reduce((s, d) => s + (d.on_task_pct || 0), 0) / arr.length : 0;
+
   // This week
   const totalMin = liveData.weekly_focus_minutes || 0;
   const weekH = Math.floor(totalMin / 60);
   const weekM = totalMin % 60;
+  const weekDir = trendDir(sum(last7), sum(prev7));
+  const weekArrow = arrowSvg(weekDir);
   if (totalMin < 60) {
-    tiles[0].querySelector('.v').innerHTML = `${totalMin}<small>m</small>`;
+    tiles[0].querySelector('.v').innerHTML = `${totalMin}<small>m</small>${weekArrow}`;
     tiles[0].querySelector('.sub').textContent = 'this week';
   } else {
-    tiles[0].querySelector('.v').innerHTML = `${weekH}h<small>${weekM}m</small>`;
+    tiles[0].querySelector('.v').innerHTML = `${weekH}h<small>${weekM}m</small>${weekArrow}`;
     tiles[0].querySelector('.sub').textContent = `${weekH}h ${weekM}m total`;
   }
 
   // On-task avg
   const avgPct = Math.round(liveData.today.on_task_pct || (liveData.recent_sessions?.[0]?.on_task_pct) || 0);
-  tiles[1].querySelector('.v').innerHTML = `${avgPct}<small>%</small>`;
+  const baseline = avgPctOf(t14);
+  const otDir = trendDir(avgPct, baseline);
+  tiles[1].querySelector('.v').innerHTML = `${avgPct}<small>%</small>${arrowSvg(otDir)}`;
   const sessionCount = liveData.recent_sessions?.length || 0;
   tiles[1].querySelector('.sub').textContent = sessionCount <= 1 ? 'today\'s focus' : 'overall average';
 
@@ -240,17 +332,24 @@ function updateStatTiles() {
   if (liveData.distractions && liveData.distractions.length > 0) {
     tiles[2].querySelector('.v').textContent = liveData.distractions[0].name;
     tiles[2].querySelector('.v').style.fontSize = '19px';
-    tiles[2].querySelector('.sub').textContent = `${liveData.distractions[0].minutes}m this week`;
+    const d0 = liveData.distractions[0];
+    const s = d0.seconds ?? d0.minutes * 60;
+    const t = s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s/60)}m` : `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+    tiles[2].querySelector('.sub').textContent = `${t} this week`;
   } else {
     tiles[2].querySelector('.v').textContent = 'None';
     tiles[2].querySelector('.v').style.fontSize = '24px';
     tiles[2].querySelector('.sub').textContent = '0m this week';
   }
 
-  // Points
-  tiles[3].querySelector('.v').textContent = liveData.total_points.toLocaleString();
+  // Points — arrow reflects sign of the latest session's points_earned (up = gained, down = lost).
+  // Old code hardcoded a `+` prefix that read as `+-42` for negative points; sign is now
+  // derived from the number itself so `-42` renders correctly.
   const lastPts = liveData.recent_sessions?.[0]?.points_earned ?? 0;
-  tiles[3].querySelector('.sub').textContent = `+${lastPts} last session`;
+  const pointsDir = lastPts > 0 ? 'up' : lastPts < 0 ? 'down' : null;
+  tiles[3].querySelector('.v').innerHTML = `${liveData.total_points.toLocaleString()}${arrowSvg(pointsDir)}`;
+  const prefix = lastPts > 0 ? '+' : '';
+  tiles[3].querySelector('.sub').textContent = `${prefix}${lastPts} last session`;
 }
 
 // ─── Calendar ────────────────────────────────────────────────────────
@@ -461,9 +560,14 @@ function smoothPath(points) {
 const ENERGY_BOLT = '<path d="M13 2 3 14h6l-1 8 10-12h-6l1-8Z" fill="var(--peak-line)"/>';
 
 function renderLineChart(viz, labels, values, xlabels) {
-  // Wider left padding to fit y-axis tick labels ("100", "-102" etc). Top and bottom pad
-  // are non-zero so the curve doesn't clip against the frame or the value dot.
-  const W = 600, H = 150, PAD_L = 44, PAD_R = 10, PAD_T = 14, PAD_B = 14;
+  // Chart SVG stretches horizontally (preserveAspectRatio="none") so the curve fills the card,
+  // but that same stretch was mangling the y-axis tick text — a font drawn once at 10px inside
+  // the stretched SVG got squashed into a wide, weird slab at display time. Fix: keep the SVG
+  // for lines + area only, and render tick labels as HTML positioned absolutely, so they use
+  // the page's real font at a real aspect ratio.
+  const W = 600, H = 150, PAD_L = 6, PAD_R = 4, PAD_T = 14, PAD_B = 14;
+  // Left inset (in the OUTER container, not SVG units) where labels sit + grid starts.
+  const HTML_LEFT_INSET = 34;
   const n = values.length;
   if (n === 0) { viz.innerHTML = '<div class="empty-state">No data yet.</div>'; labels.innerHTML = ''; return; }
 
@@ -474,7 +578,6 @@ function renderLineChart(viz, labels, values, xlabels) {
   let dMax = Math.max(rawMax, 0);
   let dMin = Math.min(rawMin, 0);
   if (dMax === dMin) { dMax = 1; dMin = -1; }
-  // A little headroom/floor so the curve peak/trough doesn't kiss the frame.
   const padSpan = (dMax - dMin) * 0.08;
   dMax += padSpan; dMin -= padSpan;
 
@@ -482,8 +585,7 @@ function renderLineChart(viz, labels, values, xlabels) {
   const y = v => PAD_T + (1 - (v - dMin) / (dMax - dMin)) * (H - PAD_T - PAD_B);
   const pts = values.map((v, i) => [PAD_L + i * step, y(v)]);
   const curve = smoothPath(pts);
-  const baselineY = y(0);   // where "0" sits on the y-axis
-  // Area fills between curve and 0-baseline — positive segments fill down, negative up.
+  const baselineY = y(0);
   const areaPath = curve
     + ` L${pts[pts.length-1][0].toFixed(1)},${baselineY.toFixed(1)}`
     + ` L${pts[0][0].toFixed(1)},${baselineY.toFixed(1)} Z`;
@@ -491,35 +593,37 @@ function renderLineChart(viz, labels, values, xlabels) {
   const dotXPct = (last[0] / W) * 100;
   const dotYPct = (last[1] / H) * 100;
 
-  // Y-axis ticks: bottom (dMin approx), middle, top (dMax approx). Rounded to nice numbers.
-  const ticks = [
-    { v: dMax - padSpan, pos: y(dMax - padSpan) },
-    { v: (dMax + dMin) / 2, pos: y((dMax + dMin) / 2) },
-    { v: dMin + padSpan, pos: y(dMin + padSpan) },
-  ];
-  const yTicksSvg = ticks.map(t => `
-    <line x1="${PAD_L}" y1="${t.pos.toFixed(1)}" x2="${W}" y2="${t.pos.toFixed(1)}" stroke="var(--line)" stroke-dasharray="1 5"/>
-    <text x="${PAD_L - 6}" y="${(t.pos + 3.5).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--ink-muted)" font-family="var(--font-sans)">${Math.round(t.v)}</text>
+  // Tick positions computed in SVG-y, converted to percentage for HTML placement.
+  const tickVals = [dMax - padSpan, (dMax + dMin) / 2, dMin + padSpan];
+  const ticks = tickVals.map(v => ({ v, posPct: (y(v) / H) * 100 }));
+
+  const gridSvg = ticks.map(t => `
+    <line x1="${PAD_L}" y1="${y(t.v).toFixed(1)}" x2="${W}" y2="${y(t.v).toFixed(1)}" stroke="var(--line)" stroke-dasharray="1 5"/>
   `).join('');
-  // Zero line drawn a shade darker whenever the domain actually straddles zero.
   const zeroLineSvg = (rawMin < 0 && rawMax > 0)
     ? `<line x1="${PAD_L}" y1="${baselineY.toFixed(1)}" x2="${W}" y2="${baselineY.toFixed(1)}" stroke="var(--ink-muted)" stroke-opacity="0.35" stroke-width="1"/>`
     : '';
+  const tickHtml = ticks.map(t => `
+    <span class="y-tick-label" style="top:${t.posPct.toFixed(2)}%;">${Math.round(t.v)}</span>
+  `).join('');
 
   viz.innerHTML = `
-    <svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
-      <defs>
-        <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="var(--moss)" stop-opacity="0.32"/>
-          <stop offset="100%" stop-color="var(--moss)" stop-opacity="0"/>
-        </linearGradient>
-      </defs>
-      ${yTicksSvg}
-      ${zeroLineSvg}
-      <path d="${areaPath}" fill="url(#trendFill)"/>
-      <path d="${curve}" fill="none" stroke="var(--moss-deep)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
-    </svg>
-    <div class="session-dot" style="left:${dotXPct.toFixed(2)}%; top:${dotYPct.toFixed(2)}%; width:9px; height:9px; box-shadow: 0 0 0 5px color-mix(in oklab, var(--moss) 25%, transparent);"></div>
+    <div class="chart-inner" style="position:absolute; inset:0 0 0 ${HTML_LEFT_INSET}px;">
+      <svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--moss)" stop-opacity="0.32"/>
+            <stop offset="100%" stop-color="var(--moss)" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        ${gridSvg}
+        ${zeroLineSvg}
+        <path d="${areaPath}" fill="url(#trendFill)"/>
+        <path d="${curve}" fill="none" stroke="var(--moss-deep)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <div class="session-dot" style="left:${dotXPct.toFixed(2)}%; top:${dotYPct.toFixed(2)}%; width:9px; height:9px; box-shadow: 0 0 0 5px color-mix(in oklab, var(--moss) 25%, transparent);"></div>
+    </div>
+    <div class="y-tick-labels" style="width:${HTML_LEFT_INSET}px;">${tickHtml}</div>
   `;
   const idxs = [0, Math.floor(n/3), Math.floor(2*n/3), n-1].filter((v,i,a) => a.indexOf(v) === i);
   labels.innerHTML = idxs.map(i => `<span>${xlabels[i]}</span>`).join('');
@@ -569,10 +673,28 @@ function renderTrend() {
     if (idx >= 0) {
       const from = Math.max(0, idx - 6);
       series = all.slice(from, idx + 1);
+    } else {
+      // Picked date isn't in the 14-day window (e.g. before the app existed) — show empty
+      // instead of silently falling back to the last 14 days, which read as "the chart lies."
+      title.innerHTML = `<span style="font-family:var(--font-serif);font-style:italic;">${fmtMonthDay(state.start)}</span> · ${meta.label.toLowerCase()}`;
+      sub.textContent = 'no data recorded on that date';
+      num.innerHTML = `0<span class="pct"> ${meta.unit}</span>`;
+      delta.innerHTML = '';
+      viz.innerHTML = '<div class="empty-state">No data for that date.</div>';
+      labels.innerHTML = '';
+      return;
     }
   } else if (state.mode === 'range' && state.start && state.end) {
     series = all.filter(t => t.date >= state.start && t.date <= state.end);
-    if (series.length === 0) series = all;
+    if (series.length === 0) {
+      title.innerHTML = `${fmtMonthDay(state.start)} — ${fmtMonthDay(state.end)}`;
+      sub.textContent = 'no data recorded in that range';
+      num.innerHTML = `0<span class="pct"> ${meta.unit}</span>`;
+      delta.innerHTML = '';
+      viz.innerHTML = '<div class="empty-state">No data in that range.</div>';
+      labels.innerHTML = '';
+      return;
+    }
   }
 
   // Headline title reflects mode; sub-copy reflects the picked stat.
@@ -699,17 +821,21 @@ function formatDateNice(iso) {
 function renderDistractions() {
   const barList = document.querySelector('.bar-list');
   if (!barList) return;
-  const distractions = liveData?.distractions ?? [];
+  // Filter out entries with zero recorded time — the old integer-minutes column collapsed
+  // anything under 60s to "0m" which read as broken. Sub-minute drifts now show in seconds.
+  const distractions = (liveData?.distractions ?? []).filter(d => (d.seconds ?? d.minutes * 60) > 0);
   if (distractions.length === 0) {
     barList.innerHTML = '<div class="empty-state">No distractions tracked yet.</div>';
     return;
   }
-  const maxMin = Math.max(...distractions.map(d => d.minutes), 1);
+  const secsOf = d => d.seconds ?? d.minutes * 60;
+  const maxS = Math.max(...distractions.map(secsOf), 1);
   barList.innerHTML = distractions.slice(0, 5).map(d => {
-    const pct = Math.round((d.minutes / maxMin) * 100);
-    const h = Math.floor(d.minutes / 60);
-    const m = d.minutes % 60;
-    const timeStr = h > 0 ? `${h}h ${m}m` : `${m}m`;
+    const s = secsOf(d);
+    const pct = Math.round((s / maxS) * 100);
+    const timeStr = s < 60 ? `${s}s`
+                  : s < 3600 ? `${Math.floor(s/60)}m`
+                  : `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
     return `<div class="bar-row"><span class="n">${d.name}</span><div class="bar"><div class="fill" style="width:${pct}%"></div></div><span class="t">${timeStr}</span></div>`;
   }).join('');
 }
@@ -1036,11 +1162,19 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
     currentSessionId = sessionState.session_id;
     setSessionUI(true);
     navigateTo('session');
+    // Blank last session's activity list so it doesn't appear as this session's data for the
+    // first ~5s until the tick loop paints real intervals.
+    _lastActivityKey = '';
+    _lastTimelineKey = '';
+    const sActList = document.getElementById('sessionActivityList');
+    if (sActList) sActList.innerHTML = '<div class="empty-state">Waiting for first tick…</div>';
+    const sViz = document.getElementById('sessionTimelineViz');
+    if (sViz) sViz.innerHTML = '';
     applySessionState(sessionState);
 
     // Update session page goal text
     const goalEl = document.querySelector('.session-goal');
-    if (goalEl) goalEl.innerHTML = goal;
+    if (goalEl) goalEl.innerHTML = pickSessionGreeting(goal, description);
     const metaEl = document.querySelector('.session-goal-meta');
     if (metaEl) {
       const now = new Date();
@@ -1158,18 +1292,24 @@ function pickRoastLine(app, detail) {
 
 function showCyberOverlay(app, detail, elapsedSec, goal) {
   currentDriftApp = app || '';
+  // If the overlay is already up, this is a re-tick of the same drift — don't wipe the
+  // user's justification input, re-run the shake, or pick a fresh roast line. Only refresh
+  // the sub-line in case the window title changed. This keeps a single, stable warning
+  // instead of what looks like a second warning stacking on top every 5s.
+  const alreadyVisible = cyberOverlay.style.display === 'flex';
   cyberOverlay.style.display = 'flex';
-  // Reset the "This is actually work" input flow every time the overlay re-appears —
-  // otherwise a half-filled textarea from the last dismissal lingers.
-  resetCyberJustify();
-  cyberContent.classList.remove('shake');
-  void cyberContent.offsetWidth;
-  cyberContent.classList.add('shake');
 
-  if (cyberHero) {
-    const line = pickRoastLine(app, detail);
-    cyberHero.textContent = line;
-    cyberHero.setAttribute('data-text', line);
+  if (!alreadyVisible) {
+    resetCyberJustify();
+    cyberContent.classList.remove('shake');
+    void cyberContent.offsetWidth;
+    cyberContent.classList.add('shake');
+
+    if (cyberHero) {
+      const line = pickRoastLine(app, detail);
+      cyberHero.textContent = line;
+      cyberHero.setAttribute('data-text', line);
+    }
   }
 
   if (cyberSub) {
@@ -1255,7 +1395,7 @@ async function submitWorkClaim(reason) {
       cyberJustifySubmit.textContent = "Confirm — it's work";
     }
     if (cyberJustifyInput) cyberJustifyInput.disabled = false;
-    showJustifyError(outcome.message || 'That didn\'t land. Try again — or click "I\'ll get back to work."');
+    showJustifyError(outcome.message || 'That didn\'t land. Try again — or click "Just a break" and take it.');
     if (cyberJustifyInput) setTimeout(() => cyberJustifyInput.focus(), 0);
     return;
   }
@@ -1620,33 +1760,36 @@ function renderSessionActivity() {
 
 function getAppIconHtml(category, procName) {
   const cat = (category || procName || '').toLowerCase();
+  if (cat.includes('invigil')) {
+    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none"><rect x="2" y="2" width="20" height="20" rx="5" fill="#5A7C4E"/><path d="M8 7v10M12 7v10M16 7v10" stroke="#F4EEDC" stroke-width="2" stroke-linecap="round"/></svg>`, hasIcon: true };
+  }
   if (cat.includes('chrome')) {
-    return { html: `<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="#4285F4"/><circle cx="12" cy="12" r="4" fill="#FFF"/><circle cx="12" cy="12" r="3" fill="#4285F4"/><path d="M12 2a10 10 0 0 1 8.66 5H12" fill="#EA4335"/><path d="M20.66 7A10 10 0 0 1 12 22v-10" fill="#FBBC05"/><path d="M12 22a10 10 0 0 1-8.66-15H12" fill="#34A853"/></svg>`, hasIcon: true };
+    return { html: `<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="10" fill="#4285F4"/><circle cx="12" cy="12" r="4" fill="#FFF"/><circle cx="12" cy="12" r="3" fill="#4285F4"/><path d="M12 2a10 10 0 0 1 8.66 5H12" fill="#EA4335"/><path d="M20.66 7A10 10 0 0 1 12 22v-10" fill="#FBBC05"/><path d="M12 22a10 10 0 0 1-8.66-15H12" fill="#34A853"/></svg>`, hasIcon: true };
   }
   if (cat.includes('antigravity')) {
-    return { html: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M12 2L2 22h20L12 2z" fill="url(#agGrad)"/><defs><linearGradient id="agGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#FF4D5E"/><stop offset="50%" stop-color="#3FE8D8"/><stop offset="100%" stop-color="#7A9BB0"/></linearGradient></defs></svg>`, hasIcon: true };
+    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none"><path d="M12 2L2 22h20L12 2z" fill="url(#agGrad)"/><defs><linearGradient id="agGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#FF4D5E"/><stop offset="50%" stop-color="#3FE8D8"/><stop offset="100%" stop-color="#7A9BB0"/></linearGradient></defs></svg>`, hasIcon: true };
   }
   if (cat.includes('discord')) {
-    return { html: `<svg viewBox="0 0 24 24" width="18" height="18" fill="#5865F2"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028z"/></svg>`, hasIcon: true };
+    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="#5865F2"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028z"/></svg>`, hasIcon: true };
   }
   if (cat.includes('youtube')) {
-    return { html: `<svg viewBox="0 0 24 24" width="18" height="18" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`, hasIcon: true };
+    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`, hasIcon: true };
   }
   // Match specifically on "vs code", "vscode", or the process file "code.exe" — the old
   // `cat.includes('code')` grabbed anything with the letters c-o-d-e (Claude Code windows,
   // "codepen", etc.) and, worse, the SVG under it was actually a checkmark path, not the
   // VS Code chevron. Real one below.
   if (/(?:^|\W)(?:vscode|vs code|code\.exe|code - insiders)/.test(cat)) {
-    return { html: `<svg viewBox="0 0 100 100" width="18" height="18"><path d="M70.9 99.3L92.4 89c1.6-.8 2.6-2.4 2.6-4.2V15.2c0-1.8-1-3.4-2.6-4.2L70.9.7c-2.1-1-4.6-.6-6.3.9L23.8 38.4 6.1 25c-1.7-1.3-4-1.2-5.5.2-1.6 1.4-1.6 3.9 0 5.3l15.4 19.5L.6 69.5c-1.6 1.4-1.6 3.9 0 5.3 1.5 1.4 3.8 1.5 5.5.2l17.7-13.4 40.8 36.8c1.7 1.5 4.2 1.9 6.3.9zM75 27.2l-31 22.8 31 22.8V27.2z" fill="#007ACC"/></svg>`, hasIcon: true };
+    return { html: `<svg viewBox="0 0 100 100" width="22" height="22"><path d="M70.9 99.3L92.4 89c1.6-.8 2.6-2.4 2.6-4.2V15.2c0-1.8-1-3.4-2.6-4.2L70.9.7c-2.1-1-4.6-.6-6.3.9L23.8 38.4 6.1 25c-1.7-1.3-4-1.2-5.5.2-1.6 1.4-1.6 3.9 0 5.3l15.4 19.5L.6 69.5c-1.6 1.4-1.6 3.9 0 5.3 1.5 1.4 3.8 1.5 5.5.2l17.7-13.4 40.8 36.8c1.7 1.5 4.2 1.9 6.3.9zM75 27.2l-31 22.8 31 22.8V27.2z" fill="#007ACC"/></svg>`, hasIcon: true };
   }
   if (/(?:^|\W)(?:explorer\.exe|file explorer|windows explorer)|(?:^explorer$)/.test(cat)) {
-    return { html: `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" fill="#FFC842"/><path d="M3 8h18v3H3z" fill="#E6A11C"/></svg>`, hasIcon: true };
+    return { html: `<svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" fill="#FFC842"/><path d="M3 8h18v3H3z" fill="#E6A11C"/></svg>`, hasIcon: true };
   }
   if (cat.includes('firefox')) {
-    return { html: `<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="#FF7139"/><path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm4 8c0 2.2-1.8 4-4 4s-4-1.8-4-4c0-.6.1-1.1.3-1.6.4 1 1.4 1.6 2.5 1.6.9 0 1.7-.4 2.2-1.1.5.7 1.3 1.1 2.2 1.1 1.1 0 2.1-.6 2.5-1.6.2.5.3 1 .3 1.6z" fill="#FFB84D"/></svg>`, hasIcon: true };
+    return { html: `<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="10" fill="#FF7139"/><path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm4 8c0 2.2-1.8 4-4 4s-4-1.8-4-4c0-.6.1-1.1.3-1.6.4 1 1.4 1.6 2.5 1.6.9 0 1.7-.4 2.2-1.1.5.7 1.3 1.1 2.2 1.1 1.1 0 2.1-.6 2.5-1.6.2.5.3 1 .3 1.6z" fill="#FFB84D"/></svg>`, hasIcon: true };
   }
   if (cat.includes('edge')) {
-    return { html: `<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="#0078D7"/><path d="M12 4a8 8 0 0 1 8 8c0 2-1 4-3 5-1 .5-2 .5-3 0-1.5-1-2-3-1-4.5.5-1 2-1.5 3-1H8c-2 0-3 1-3 3s1.5 4 4 4c2 0 3-1 4-2h5c-1 3-4 5-7 5-4 0-8-3-8-8s3-9 8-9z" fill="#33B4E5"/></svg>`, hasIcon: true };
+    return { html: `<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="10" fill="#0078D7"/><path d="M12 4a8 8 0 0 1 8 8c0 2-1 4-3 5-1 .5-2 .5-3 0-1.5-1-2-3-1-4.5.5-1 2-1.5 3-1H8c-2 0-3 1-3 3s1.5 4 4 4c2 0 3-1 4-2h5c-1 3-4 5-7 5-4 0-8-3-8-8s3-9 8-9z" fill="#33B4E5"/></svg>`, hasIcon: true };
   }
   // Fallback: soft initials tile — deliberately unopinionated so it's clearly a placeholder
   // and not a wrong-looking real logo.
@@ -1723,8 +1866,9 @@ function renderActivityList(container, items) {
       : 'now';
     const timeDisplay = startTime ? `${startTime} · ${dur}` : dur;
     const bgStyle = icon.hasIcon ? 'background:transparent;' : `background:${color};`;
+    const iconClass = icon.hasIcon ? 'a-icon' : 'a-icon no-icon';
     return `<div class="activity-row">
-      <div class="a-icon" style="${bgStyle}display:flex;align-items:center;justify-content:center;">${icon.html}</div>
+      <div class="${iconClass}" style="${bgStyle}display:flex;align-items:center;justify-content:center;">${icon.html}</div>
       <div><span class="a-name">${a.category || a.process_name}</span> <span class="a-detail">— ${a.window_title || ''}</span></div>
       <div class="a-dur">${timeDisplay}</div>
       <span class="a-badge ${status === 'on_task' ? 'on-task' : 'drift'}">${status === 'on_task' ? 'on task' : 'drift'}</span>
@@ -1742,8 +1886,22 @@ function renderDashActivity() {
   const list = document.getElementById('dashActivityList');
   const title = document.getElementById('dashActivityTitle');
   const meta = document.getElementById('dashActivityMeta');
-  title.textContent = 'Activity today';
   meta.textContent = '';
+
+  // If the user picked a date on the calendar, follow that date instead of always showing
+  // today's activity. Range mode uses the whole range.
+  if (state.mode === 'single' && state.start) {
+    title.textContent = `Activity — ${fmtMonthDay(state.start)}`;
+    loadActivityForRange(state.start, state.start, list, meta);
+    return;
+  }
+  if (state.mode === 'range' && state.start && state.end) {
+    title.textContent = `Activity — ${fmtMonthDay(state.start)} → ${fmtMonthDay(state.end)}`;
+    loadActivityForRange(state.start, state.end, list, meta);
+    return;
+  }
+
+  title.textContent = 'Activity today';
   if (liveData?.recent_sessions?.length > 0) {
     const latestId = liveData.recent_sessions[0].id;
     invoke('get_session_intervals', { sessionId: latestId }).then(intervals => {
@@ -1755,6 +1913,33 @@ function renderDashActivity() {
   } else {
     list.innerHTML = '<div class="empty-state">Start a session to see activity.</div>';
   }
+}
+
+// Load activity intervals for the sessions inside a date range and paint them into the
+// dashboard activity card. Called by renderDashActivity when the calendar has a selection.
+function loadActivityForRange(startDate, endDate, list, meta) {
+  invoke('get_sessions_in_range', { start: startDate, end: endDate })
+    .then(sessions => {
+      if (!sessions || sessions.length === 0) {
+        list.innerHTML = '<div class="empty-state">No sessions on that date.</div>';
+        return;
+      }
+      // Pull intervals from each session and merge.
+      return Promise.all(
+        sessions.map(s => invoke('get_session_intervals', { sessionId: s.id }).catch(() => []))
+      ).then(all => {
+        const flat = all.flat().sort((a, b) => (a.start_ts || '').localeCompare(b.start_ts || ''));
+        meta.textContent = `${flat.length} entries`;
+        if (flat.length === 0) {
+          list.innerHTML = '<div class="empty-state">No activity in that window.</div>';
+        } else {
+          renderActivityList(list, flat.slice(-10));
+        }
+      });
+    })
+    .catch(() => {
+      list.innerHTML = '<div class="empty-state">Could not load activity.</div>';
+    });
 }
 
 // ─── Settings ────────────────────────────────────────────────────────

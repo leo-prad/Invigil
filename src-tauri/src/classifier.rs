@@ -46,6 +46,23 @@ pub fn classify_tier0(window: &WindowInfo, profile: &Profile) -> (Classification
         }
     }
 
+    // Utility apps that are almost never distractions on their own — opening File Explorer
+    // to grab a document, checking Task Manager, snipping a screenshot, jotting in Notepad,
+    // punching numbers into Calculator, tweaking a Windows Setting. These get a blanket
+    // OnTask so a brief visit doesn't count as drift. If the user genuinely idles in one
+    // of them for a whole session, they can still add it to their deny list.
+    let utility_apps = [
+        "explorer.exe", "taskmgr", "snippingtool", "screenclippinghost",
+        "notepad.exe", "wordpad", "calc.exe", "calculator",
+        "systemsettings", "control.exe", "mmc.exe",
+        "shellexperiencehost", "startmenuexperiencehost",
+    ];
+    for app in &utility_apps {
+        if process_lower.contains(app) {
+            return (Classification::OnTask, format!("utility:{}", app));
+        }
+    }
+
     // Known always-play apps (system-level denylist)
     let system_play = [
         "tiktok", "netflix", "hulu", "twitch.tv", "crunchyroll",
