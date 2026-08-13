@@ -907,7 +907,21 @@ function navigateTo(page) {
     if (p === page) { el.classList.remove('page-enter'); void el.offsetWidth; el.classList.add('page-enter'); }
   });
   if (page === 'session') renderSessionTimeline();
-  if (page === 'bounties') refreshBounties();
+  if (page === 'bounties') { refreshBounties(); wireBountyDebugOnce(); }
+}
+
+let _bountyDebugWired = false;
+function wireBountyDebugOnce() {
+  if (_bountyDebugWired) return;
+  const btn = document.getElementById('bountyResetBtn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    try {
+      await invoke('debug_reset_bounties');
+      await refreshBounties();
+    } catch (e) { console.warn('debug_reset_bounties failed:', e); }
+  });
+  _bountyDebugWired = true;
 }
 
 document.querySelectorAll('.nav-item[data-page]').forEach(item => {
@@ -935,6 +949,8 @@ async function refreshBounties() {
   }
 }
 
+const DIFF_ORDER = { easy: 0, medium: 1, hard: 2 };
+
 function renderBountyGrid(bounties) {
   const grid = document.getElementById('bountyGrid');
   if (!grid) return;
@@ -942,24 +958,41 @@ function renderBountyGrid(bounties) {
     grid.innerHTML = '<div class="bounty-empty">No bounties yet — check back after midnight.</div>';
     return;
   }
-  grid.innerHTML = bounties.map(cardHtml).join('');
-  // Wire buttons after render (event delegation would work too; direct is simpler with 3 cards).
-  grid.querySelectorAll('[data-action="accept"]').forEach(b => {
-    b.addEventListener('click', () => acceptBounty(b.dataset.id));
+  // Sort easy → medium → hard so the difficulty ramps left-to-right / top-to-bottom.
+  const sorted = [...bounties].sort((a, b) =>
+    (DIFF_ORDER[a.difficulty] ?? 9) - (DIFF_ORDER[b.difficulty] ?? 9)
+  );
+  // One-at-a-time rule: if any bounty on the board is currently accepted, other
+  // still-available bounties render as "locked" so the user can't stack acceptances.
+  const hasActive = sorted.some(b => b.status === 'accepted');
+  grid.innerHTML = sorted.map(b => cardHtml(b, hasActive)).join('');
+
+  grid.querySelectorAll('[data-action="accept"]').forEach(el => {
+    el.addEventListener('click', () => acceptBounty(el.dataset.id));
   });
-  grid.querySelectorAll('[data-action="claim"]').forEach(b => {
-    b.addEventListener('click', () => claimBounty(b.dataset.id));
+  grid.querySelectorAll('[data-action="claim"]').forEach(el => {
+    el.addEventListener('click', () => claimBounty(el.dataset.id));
   });
+  grid.querySelectorAll('[data-action="demo-complete"]').forEach(el => {
+    el.addEventListener('click', async () => {
+      try {
+        await invoke('debug_complete_bounty', { id: el.dataset.id });
+        await refreshBounties();
+      } catch (e) { console.warn('debug_complete_bounty failed:', e); }
+    });
+  });
+  grid.querySelectorAll('.bounty-card').forEach(attachTilt);
 }
 
-function cardHtml(b) {
-  const kindLabel = b.kind === 'reinforcing' ? 'Reinforcing' : 'Exploratory';
+function cardHtml(b, hasActive) {
   const diffLabel = b.difficulty.charAt(0).toUpperCase() + b.difficulty.slice(1);
   const pct = Math.max(0, Math.min(100, (b.progress || 0) * 100));
   const showProgress = b.status === 'accepted' || b.status === 'completed' || b.status === 'claimed';
   let btn;
   if (b.status === 'available') {
-    btn = `<button class="bounty-btn accept" data-action="accept" data-id="${b.id}">Accept bounty</button>`;
+    btn = hasActive
+      ? `<button class="bounty-btn locked" disabled title="Finish or claim your active bounty first">Locked</button>`
+      : `<button class="bounty-btn accept" data-action="accept" data-id="${b.id}">Accept bounty</button>`;
   } else if (b.status === 'accepted') {
     btn = `<button class="bounty-btn in-progress" disabled>In progress…</button>`;
   } else if (b.status === 'completed') {
@@ -969,33 +1002,106 @@ function cardHtml(b) {
   }
   return `
     <div class="bounty-card ${b.status}">
-      <div class="bounty-badges">
-        <span class="bounty-badge kind-${b.kind}">${kindLabel}</span>
-        <span class="bounty-badge diff-${b.difficulty}">${diffLabel}</span>
+      <div class="b-info">
+        <div class="bounty-badges">
+          <span class="bounty-badge diff-${b.difficulty}">${diffLabel}</span>
+        </div>
+        <div class="bounty-title">${escapeHtml(b.title)}</div>
+        <div class="bounty-desc">${escapeHtml(b.description)}</div>
       </div>
-      <div class="bounty-title">${escapeHtml(b.title)}</div>
-      <div class="bounty-desc">${escapeHtml(b.description)}</div>
-      <div class="bounty-reward">
-        <span class="num">+${b.reward}</span>
-        <span class="lbl">pts</span>
+      <div class="b-reward-slot">
+        <div class="bounty-reward">
+          <span class="num">+${b.reward}</span>
+          <span class="lbl">pts</span>
+        </div>
       </div>
-      ${showProgress ? `
-        <div class="bounty-progress">
-          <div class="bounty-progress-track"><div class="bounty-progress-fill" style="width:${pct}%"></div></div>
-          <div class="bounty-progress-label">${escapeHtml(b.progress_label || '')}</div>
-        </div>` : ''}
-      ${btn}
+      <div class="b-progress-slot">
+        ${showProgress ? `
+          <div class="bounty-progress" style="min-width:220px;">
+            <div class="bounty-progress-track"><div class="bounty-progress-fill" style="width:${pct}%"></div></div>
+            <div class="bounty-progress-label">${escapeHtml(b.progress_label || '')}</div>
+          </div>` : ''}
+      </div>
+      <div class="b-action-slot">
+        ${btn}
+        ${b.status === 'accepted' ? `<button class="bounty-card-demo" data-action="demo-complete" data-id="${b.id}" title="Skip the work — flip to Completed for demo">⚡ Force complete</button>` : ''}
+      </div>
     </div>
   `;
 }
 
-async function acceptBounty(id) {
-  try {
-    await invoke('accept_bounty', { id });
-    await refreshBounties();
-  } catch (e) {
-    console.warn('accept_bounty failed:', e);
-  }
+/**
+ * Subtle cursor-follow 3D tilt on hover. Max ±5deg on either axis, animated via
+ * transform. Kept intentionally soft so it reads as material response, not a
+ * gimmick — no exaggerated depth, no glare layer, no bouncy spring.
+ */
+function attachTilt(card) {
+  const MAX_DEG = 4;
+  let raf = 0;
+  const onMove = (e) => {
+    const rect = card.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;   // 0..1
+    const y = (e.clientY - rect.top) / rect.height;   // 0..1
+    const ry = (x - 0.5) * (MAX_DEG * 2);   // rotateY based on horizontal position
+    const rx = -(y - 0.5) * (MAX_DEG * 2);  // rotateX based on vertical position (negated for natural feel)
+    if (raf) cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      card.style.transform = `perspective(1200px) rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg) translateZ(0)`;
+    });
+  };
+  const onLeave = () => {
+    if (raf) cancelAnimationFrame(raf);
+    // Ease back to rest with a CSS transition, then clear the inline transform.
+    card.style.transition = 'transform 0.35s cubic-bezier(.2,.7,.3,1)';
+    card.style.transform = '';
+    setTimeout(() => { card.style.transition = ''; }, 400);
+  };
+  const onEnter = () => { card.style.transition = ''; };
+  card.addEventListener('mousemove', onMove);
+  card.addEventListener('mouseleave', onLeave);
+  card.addEventListener('mouseenter', onEnter);
+}
+
+/**
+ * Prompt the user before actually accepting. Since only one bounty at a time is
+ * allowed, this is a soft-lock — makes the commitment explicit before the other
+ * cards lock themselves out.
+ */
+function acceptBounty(id) {
+  const grid = document.getElementById('bountyGrid');
+  const card = grid?.querySelector(`.bounty-card [data-id="${id}"]`)?.closest('.bounty-card');
+  const title = card?.querySelector('.bounty-title')?.textContent?.trim() || '';
+  const backdrop = document.getElementById('bountyConfirmBackdrop');
+  const targetEl = document.getElementById('bountyConfirmTarget');
+  const yesBtn = document.getElementById('bountyConfirmYes');
+  const noBtn = document.getElementById('bountyConfirmNo');
+  if (!backdrop || !yesBtn || !noBtn) return;
+  if (targetEl) targetEl.textContent = title;
+  backdrop.style.display = 'flex';
+
+  const cleanup = () => {
+    backdrop.style.display = 'none';
+    yesBtn.removeEventListener('click', onYes);
+    noBtn.removeEventListener('click', onNo);
+    backdrop.removeEventListener('click', onBackdrop);
+    document.removeEventListener('keydown', onKey);
+  };
+  const onYes = async () => {
+    cleanup();
+    try {
+      await invoke('accept_bounty', { id });
+      await refreshBounties();
+    } catch (e) {
+      console.warn('accept_bounty failed:', e);
+    }
+  };
+  const onNo = () => cleanup();
+  const onBackdrop = (e) => { if (e.target === backdrop) cleanup(); };
+  const onKey = (e) => { if (e.key === 'Escape') cleanup(); };
+  yesBtn.addEventListener('click', onYes);
+  noBtn.addEventListener('click', onNo);
+  backdrop.addEventListener('click', onBackdrop);
+  document.addEventListener('keydown', onKey);
 }
 
 async function claimBounty(id) {

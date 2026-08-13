@@ -469,6 +469,17 @@ fn claim_bounty(state: tauri::State<'_, AppState>, id: String) -> Result<i64, St
     bounties::claim(&state.db, &id)
 }
 
+// Temp demo helpers — remove when demo mode is retired.
+#[tauri::command]
+fn debug_reset_bounties(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    bounties::debug_reset(&state.db)
+}
+
+#[tauri::command]
+fn debug_complete_bounty(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    bounties::debug_complete(&state.db, &id)
+}
+
 #[tauri::command]
 fn get_session_intervals(
     state: tauri::State<'_, AppState>,
@@ -532,6 +543,8 @@ pub fn run() {
             get_bounties,
             accept_bounty,
             claim_bounty,
+            debug_reset_bounties,
+            debug_complete_bounty,
         ])
         .setup(|app| {
             // Bring main window to front if found
