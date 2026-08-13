@@ -35,7 +35,13 @@
           Session
         </div>
         <div class="nav-item" data-page="bounties">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2l2.4 5.6L20 8.4l-4 4 1 6.1L12 15.8 6.9 18.5l1-6.1-4-4 5.6-.8L12 2z"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 4H6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"/>
+            <rect x="8" y="2" width="8" height="4" rx="1"/>
+            <path d="M8 12h6"/>
+            <path d="M8 16h4"/>
+            <path d="M17.4 12.6l2 2-4.2 4.2H13v-2.2z"/>
+          </svg>
           Bounties
         </div>
         <div class="nav-item" data-page="settings">
@@ -99,7 +105,6 @@
 
       <div class="top">
         <div>
-          <div class="eyebrow"><span class="dot"></span> Dashboard</div>
           <h1 class="greeting">Good afternoon, Leo — <em>you're on a roll.</em></h1>
           <div class="greeting-sub">Twelve days locked in. Saturday, Aug 8 · no session running.</div>
         </div>
@@ -358,13 +363,21 @@
 
         <div class="top">
           <div>
-            <div class="eyebrow"><span class="dot"></span> Daily bounties</div>
-            <h1 class="greeting">Three quests. <em>Pick your ground.</em></h1>
-            <div class="greeting-sub">Optional challenges from Professor Xeno. Complete them for bonus points — they refresh at midnight.</div>
+            <h1 class="greeting">Three bounties. <em>Pick your ground.</em></h1>
+            <div class="greeting-sub">Challenges from Professor Xeno. Complete them for bonus points — they refresh at midnight.</div>
           </div>
-          <div class="bounty-refresh">
-            <div class="bounty-refresh-label">Refreshes in</div>
-            <div class="bounty-refresh-time" id="bountyCountdown">--:--:--</div>
+          <div class="bounty-top-right">
+            <button class="bounty-debug-btn" id="bountyResetBtn" title="Wipe today's pool and regenerate (demo only)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 1 1-3-6.7"/>
+                <path d="M21 4v5h-5"/>
+              </svg>
+              Reset (demo)
+            </button>
+            <div class="bounty-refresh">
+              <div class="bounty-refresh-label">Refreshes in</div>
+              <div class="bounty-refresh-time" id="bountyCountdown">--:--:--</div>
+            </div>
           </div>
         </div>
 
@@ -380,7 +393,6 @@
 
         <div class="top">
           <div>
-            <div class="eyebrow"><span class="dot"></span> Settings</div>
             <h1 class="greeting">Tune how <em>Invigil</em> watches.</h1>
             <div class="greeting-sub">Changes apply to future sessions — this stays on-device.</div>
           </div>
@@ -520,6 +532,30 @@
     </div>
 
     <button class="btn primary modal-start s-hide" id="summaryDoneBtn">Back to dashboard</button>
+  </div>
+</div>
+
+<!-- ================= BOUNTY ACCEPT CONFIRMATION ================= -->
+<div class="modal-backdrop" id="bountyConfirmBackdrop" style="display:none;">
+  <div class="modal-card bounty-confirm-card">
+    <div class="modal-head">
+      <div class="modal-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+          <path d="M12 2 3 14h6l-1 8 10-12h-6l1-8Z"/>
+        </svg>
+      </div>
+      <div class="modal-headings">
+        <h2>Are you sure?</h2>
+        <div class="bounty-confirm-target" id="bountyConfirmTarget">—</div>
+      </div>
+    </div>
+    <div class="bounty-confirm-body">
+      You can only choose <em>1 bounty</em> at a time to finish.
+    </div>
+    <div class="bounty-confirm-actions">
+      <button class="btn ghost" id="bountyConfirmNo">No</button>
+      <button class="btn primary" id="bountyConfirmYes">Yes, accept</button>
+    </div>
   </div>
 </div>
 
