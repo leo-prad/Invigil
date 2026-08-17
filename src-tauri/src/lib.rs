@@ -1,3 +1,4 @@
+mod ai_setup;
 mod bounties;
 mod classifier;
 mod db;
@@ -488,6 +489,62 @@ fn get_session_intervals(
     state.db.get_session_intervals(&session_id).map_err(|e| e.to_string())
 }
 
+// ─── AI setup commands ──────────────────────────────────────────────
+
+#[tauri::command]
+fn get_ai_status(state: tauri::State<'_, AppState>) -> Result<ai_setup::AiStatus, String> {
+    let setup_seen = state.db.get_setting("ai_setup_seen").unwrap_or_else(|_| "false".into()) == "true";
+    let ai_enabled = state.db.get_setting("ai_enabled").unwrap_or_else(|_| "false".into()) == "true";
+    let ollama_reachable = ai_setup::ollama_reachable();
+    let model_present = if ollama_reachable {
+        ai_setup::model_present(ai_setup::MODEL)
+    } else { false };
+    Ok(ai_setup::AiStatus { setup_seen, ai_enabled, ollama_reachable, model_present })
+}
+
+#[tauri::command]
+fn mark_ai_setup_seen(
+    state: tauri::State<'_, AppState>,
+    opted_in: bool,
+) -> Result<(), String> {
+    state.db.set_setting("ai_setup_seen", "true").map_err(|e| e.to_string())?;
+    state.db.set_setting("ai_enabled", if opted_in { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+    state.db.set_setting("tier1_enabled", if opted_in { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_ai_enabled(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    state.db.set_setting("ai_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+    state.db.set_setting("tier1_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn install_ai(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    // Fire and forget — progress arrives via `ai-setup-progress` events.
+    let db = state.db.clone();
+    let app_bg = app.clone();
+    std::thread::spawn(move || {
+        ai_setup::run_install(app_bg.clone());
+        // After success, flip the enabled flag automatically so the app
+        // starts using AI immediately.
+        if ai_setup::ollama_reachable() && ai_setup::model_present(ai_setup::MODEL) {
+            let _ = db.set_setting("ai_enabled", "true");
+            let _ = db.set_setting("tier1_enabled", "true");
+            let _ = db.set_setting("ai_setup_seen", "true");
+        }
+    });
+    Ok(())
+}
+
 // ─── App entry ───────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -545,6 +602,11 @@ pub fn run() {
             claim_bounty,
             debug_reset_bounties,
             debug_complete_bounty,
+            // AI setup
+            get_ai_status,
+            mark_ai_setup_seen,
+            set_ai_enabled,
+            install_ai,
         ])
         .setup(|app| {
             // Bring main window to front if found
