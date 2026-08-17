@@ -422,10 +422,149 @@
           </div>
         </section>
 
+        <section class="card settings-card" id="aiSettingsCard">
+          <div class="card-head">
+            <div class="card-title">AI assistance</div>
+            <div class="card-meta">local model for smarter drift detection</div>
+          </div>
+          <p class="settings-desc">
+            When on, Invigil uses a small local AI model (gemma3:4b via Ollama) to judge
+            borderline windows in context of your goal. Runs entirely on your machine — nothing
+            uploads anywhere. When off, Invigil falls back to built-in rules only.
+          </p>
+          <div class="ai-status-row">
+            <div class="ai-status-labels">
+              <div class="ai-status-headline" id="aiStatusHeadline">Checking…</div>
+              <div class="ai-status-sub" id="aiStatusSub"></div>
+            </div>
+            <div class="ai-status-controls">
+              <label class="switch" id="aiEnabledSwitch" style="display:none;">
+                <input type="checkbox" id="aiEnabledToggle">
+                <span class="switch-slider"></span>
+              </label>
+              <button class="btn primary" id="aiInstallBtn" style="display:none;">
+                Install AI (~3.3 GB)
+              </button>
+            </div>
+          </div>
+        </section>
+
       </div>
       <!-- /page-settings -->
 
     </main>
+  </div>
+</div>
+
+<!-- ================= AI ONBOARDING MODAL ================= -->
+<div class="modal-backdrop" id="aiOnboardBackdrop" style="display:none;">
+  <div class="modal-card ai-onboard-card">
+
+    <!-- Pitch state -->
+    <div class="ai-onboard-state" data-ai-state="pitch">
+      <h2 class="ai-onboard-title">Want smarter distraction detection?</h2>
+      <p class="ai-onboard-lede">
+        Invigil can run a small AI model locally to judge borderline windows —
+        things like "is <em>this</em> YouTube tab a lecture or a rabbit hole?"
+        It never leaves your machine.
+      </p>
+
+      <div class="ai-compare">
+        <div class="ai-compare-col recommended">
+          <span class="ai-compare-label">Opt in</span>
+          <span class="ai-compare-head">Full AI assistance</span>
+          <span class="ai-compare-body">
+            Judges ambiguous windows in context. Better goal validation.
+            Adapts to your specific study language.
+          </span>
+        </div>
+        <div class="ai-compare-col">
+          <span class="ai-compare-label">Opt out</span>
+          <span class="ai-compare-head">Rules only</span>
+          <span class="ai-compare-body">
+            Uses built-in allow/deny lists. Faster, no download —
+            but may flag things it shouldn't understand.
+          </span>
+        </div>
+      </div>
+
+      <div class="ai-size-note">
+        <span>Downloads Ollama + gemma3:4b</span>
+        <strong>~3.3&nbsp;GB · one-time</strong>
+      </div>
+
+      <div class="ai-onboard-actions">
+        <button class="btn ghost" id="aiOptOutBtn">Skip for now</button>
+        <button class="btn primary" id="aiOptInBtn">Install AI (recommended)</button>
+      </div>
+    </div>
+
+    <!-- Progress state -->
+    <div class="ai-onboard-state" data-ai-state="progress" style="display:none;">
+      <h2 class="ai-onboard-title">Setting up AI assist</h2>
+      <p class="ai-onboard-lede">You can keep using Invigil. AI features will switch on when this finishes.</p>
+
+      <div class="ai-progress-block">
+        <div class="ai-step" data-step-index="1">
+          <span class="ai-step-name">1. Download Ollama installer</span>
+          <span class="ai-step-state">Waiting</span>
+        </div>
+        <div class="ai-step" data-step-index="2">
+          <span class="ai-step-name">2. Install Ollama service</span>
+          <span class="ai-step-state">Waiting</span>
+        </div>
+        <div class="ai-step" data-step-index="3">
+          <span class="ai-step-name">3. Pull gemma3:4b</span>
+          <span class="ai-step-state">Waiting</span>
+        </div>
+        <div class="ai-progress-bar"><i id="aiProgressFill"></i></div>
+        <div class="ai-step" data-step-index="4">
+          <span class="ai-step-name">4. Finishing up</span>
+          <span class="ai-step-state">Waiting</span>
+        </div>
+      </div>
+
+      <div class="ai-status-line" id="aiProgressStatus">Starting…</div>
+
+      <div class="ai-onboard-actions">
+        <button class="btn ghost" id="aiHideBtn">Hide window</button>
+      </div>
+    </div>
+
+    <!-- Success state -->
+    <div class="ai-onboard-state" data-ai-state="success" style="display:none;">
+      <div class="ai-success-head">
+        <div class="ai-success-icon">✓</div>
+        <div>
+          <h2 class="ai-onboard-title" style="margin-bottom:2px;">AI assist is on</h2>
+          <p class="ai-onboard-lede">Ambiguous windows will now be judged in context of your session goal.</p>
+        </div>
+      </div>
+      <div class="ai-size-note">
+        <span>Model</span>
+        <strong style="color: var(--olive-deep);">gemma3:4b · installed</strong>
+      </div>
+      <p class="ai-onboard-lede" style="font-size:13px; color:var(--muted);">
+        You can turn this off any time under <strong>Settings → AI assistance</strong>.
+      </p>
+      <div class="ai-onboard-actions">
+        <button class="btn primary" id="aiDoneBtn">Start using Invigil</button>
+      </div>
+    </div>
+
+    <!-- Error state -->
+    <div class="ai-onboard-state" data-ai-state="error" style="display:none;">
+      <h2 class="ai-onboard-title">Couldn't finish AI setup</h2>
+      <p class="ai-onboard-lede">Invigil will keep running with rules-only detection. You can retry when you're ready.</p>
+      <div class="ai-error-strip">
+        <strong>Setup failed</strong> — <span id="aiErrorReason">unknown error</span>
+      </div>
+      <div class="ai-onboard-actions">
+        <button class="btn ghost" id="aiLaterBtn">I'll do it later</button>
+        <button class="btn primary" id="aiRetryBtn">Retry</button>
+      </div>
+    </div>
+
   </div>
 </div>
 

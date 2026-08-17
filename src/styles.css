@@ -1521,3 +1521,219 @@
     85%  { opacity: 1; }
     100% { transform: translate3d(var(--dx, 0px), 105vh, 0) rotate(var(--rot, 720deg)); opacity: 0; }
   }
+
+  /* ─── AI onboarding modal ──────────────────────────────────────── */
+  .ai-onboard-card {
+    max-width: 520px;
+    padding: 28px 28px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .ai-onboard-title {
+    font-family: Charter, "Iowan Old Style", Georgia, serif;
+    font-weight: 500;
+    font-size: 26px;
+    letter-spacing: -0.01em;
+    margin: 0;
+    color: var(--ink);
+    text-wrap: balance;
+  }
+  .ai-onboard-lede {
+    color: var(--ink-mid);
+    font-size: 14.5px;
+    line-height: 1.55;
+    margin: 0;
+  }
+  .ai-onboard-lede em { color: var(--terracotta); font-style: italic; }
+
+  .ai-compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding: 14px;
+    background: var(--cream);
+    border-radius: 12px;
+    border: 1px solid var(--line);
+  }
+  .ai-compare-col {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--paper);
+    border: 1px solid transparent;
+    position: relative;
+  }
+  .ai-compare-col.recommended {
+    border-color: var(--forest);
+    background: var(--paper);
+  }
+  .ai-compare-col.recommended::after {
+    content: "Recommended";
+    position: absolute;
+    top: -9px;
+    right: 10px;
+    background: var(--forest);
+    color: var(--paper);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 700;
+  }
+  .ai-compare-label {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-muted);
+    font-weight: 700;
+  }
+  .ai-compare-head {
+    font-family: Charter, Georgia, serif;
+    font-size: 15px;
+    color: var(--ink);
+  }
+  .ai-compare-body {
+    font-size: 12.5px;
+    color: var(--ink-mid);
+    line-height: 1.45;
+  }
+
+  .ai-size-note {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 11px 14px;
+    background: var(--cream);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--ink-mid);
+  }
+  .ai-size-note strong {
+    font-family: Charter, Georgia, serif;
+    font-weight: 600;
+    color: var(--terracotta);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ai-onboard-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  .ai-progress-block {
+    background: var(--cream);
+    border-radius: 10px;
+    padding: 16px;
+    border: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .ai-step {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13.5px;
+  }
+  .ai-step .ai-step-name { color: var(--ink); }
+  .ai-step .ai-step-state {
+    font-family: Charter, Georgia, serif;
+    font-size: 12.5px;
+    color: var(--ink-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .ai-step.done .ai-step-state { color: var(--forest-3); }
+  .ai-step.active .ai-step-state { color: var(--terracotta); font-weight: 600; }
+  .ai-progress-bar {
+    height: 6px;
+    background: var(--line);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .ai-progress-bar > i {
+    display: block;
+    height: 100%;
+    background: var(--terracotta);
+    width: 0%;
+    transition: width 0.3s ease;
+  }
+  .ai-status-line {
+    font-size: 12px;
+    color: var(--ink-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ai-success-head {
+    display: flex; gap: 14px; align-items: center;
+  }
+  .ai-success-icon {
+    width: 46px; height: 46px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--forest) 15%, var(--paper));
+    color: var(--forest);
+    display: flex; align-items: center; justify-content: center;
+    font-family: Charter, Georgia, serif;
+    font-size: 24px;
+    border: 1px solid color-mix(in srgb, var(--forest) 30%, transparent);
+    flex-shrink: 0;
+  }
+
+  .ai-error-strip {
+    padding: 12px 14px;
+    background: color-mix(in srgb, var(--terracotta) 8%, var(--paper));
+    border: 1px solid color-mix(in srgb, var(--terracotta) 30%, var(--line));
+    border-left: 3px solid var(--terracotta);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--ink);
+  }
+  .ai-error-strip strong { color: var(--terracotta); font-weight: 600; }
+
+  /* ─── Settings > AI section ────────────────────────────────────── */
+  .ai-status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding-top: 6px;
+  }
+  .ai-status-labels { display: flex; flex-direction: column; gap: 2px; }
+  .ai-status-headline {
+    font-family: Charter, Georgia, serif;
+    font-size: 15px;
+    color: var(--ink);
+  }
+  .ai-status-sub { font-size: 12px; color: var(--ink-muted); }
+  .ai-status-controls { display: flex; align-items: center; gap: 10px; }
+
+  .switch { position: relative; display: inline-block; width: 42px; height: 24px; cursor: pointer; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch-slider {
+    position: absolute; inset: 0;
+    background: var(--line);
+    border-radius: 999px;
+    transition: background 0.15s ease;
+  }
+  .switch-slider::after {
+    content: "";
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 18px; height: 18px;
+    background: var(--paper);
+    border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    transition: left 0.18s ease;
+  }
+  .switch input:checked + .switch-slider { background: var(--forest); }
+  .switch input:checked + .switch-slider::after { left: 21px; }
+
+  @media (max-width: 600px) {
+    .ai-compare { grid-template-columns: 1fr; }
+    .ai-onboard-card { max-width: 92vw; }
+  }

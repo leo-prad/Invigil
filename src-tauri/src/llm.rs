@@ -10,7 +10,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 const OLLAMA_HOST: &str = "127.0.0.1:11434";
-const MODEL: &str = "gemma:e4b";
+const MODEL: &str = "gemma3:4b";
 const TIMEOUT: Duration = Duration::from_secs(4);
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 

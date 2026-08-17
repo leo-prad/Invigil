@@ -2622,6 +2622,188 @@ function updateAdvPanel(s) {
   if (memEl) memEl.textContent = `${mem.toFixed(0)} MB`;
 }
 
+// ─── AI onboarding ──────────────────────────────────────────────────
+
+const aiOnboard = {
+  backdrop: null,
+  states: {},
+  progressUnlisten: null,
+  aiStatus: null,
+
+  init() {
+    this.backdrop = document.getElementById('aiOnboardBackdrop');
+    if (!this.backdrop) return;
+    this.states = {
+      pitch: this.backdrop.querySelector('[data-ai-state="pitch"]'),
+      progress: this.backdrop.querySelector('[data-ai-state="progress"]'),
+      success: this.backdrop.querySelector('[data-ai-state="success"]'),
+      error: this.backdrop.querySelector('[data-ai-state="error"]'),
+    };
+
+    document.getElementById('aiOptOutBtn')?.addEventListener('click', () => this.optOut());
+    document.getElementById('aiOptInBtn')?.addEventListener('click', () => this.startInstall());
+    document.getElementById('aiHideBtn')?.addEventListener('click', () => this.hide());
+    document.getElementById('aiDoneBtn')?.addEventListener('click', () => {
+      this.hide();
+      this.refreshSettings();
+    });
+    document.getElementById('aiLaterBtn')?.addEventListener('click', () => this.hide());
+    document.getElementById('aiRetryBtn')?.addEventListener('click', () => this.startInstall());
+
+    document.getElementById('aiInstallBtn')?.addEventListener('click', () => this.showPitch());
+    document.getElementById('aiEnabledToggle')?.addEventListener('change', async (e) => {
+      try { await invoke('set_ai_enabled', { enabled: e.target.checked }); }
+      catch (err) { console.warn('set_ai_enabled failed', err); }
+      this.refreshSettings();
+    });
+  },
+
+  async checkFirstRun() {
+    try {
+      this.aiStatus = await invoke('get_ai_status');
+    } catch (e) {
+      console.warn('get_ai_status failed:', e);
+      return;
+    }
+    this.refreshSettings();
+    if (!this.aiStatus.setup_seen) {
+      this.showPitch();
+    }
+  },
+
+  setState(name) {
+    for (const [k, el] of Object.entries(this.states)) {
+      if (el) el.style.display = (k === name) ? '' : 'none';
+    }
+  },
+
+  showPitch() {
+    if (!this.backdrop) return;
+    this.setState('pitch');
+    this.backdrop.style.display = 'flex';
+  },
+
+  hide() {
+    if (this.backdrop) this.backdrop.style.display = 'none';
+    if (this.progressUnlisten) { this.progressUnlisten(); this.progressUnlisten = null; }
+  },
+
+  async optOut() {
+    try { await invoke('mark_ai_setup_seen', { optedIn: false }); }
+    catch (e) { console.warn('mark_ai_setup_seen failed', e); }
+    this.hide();
+    this.refreshSettings();
+  },
+
+  async startInstall() {
+    this.setState('progress');
+    this.resetProgressUi();
+    // Mark as seen up-front so if the user closes the app mid-install we don't re-prompt.
+    try { await invoke('mark_ai_setup_seen', { optedIn: true }); } catch (e) {}
+
+    if (this.progressUnlisten) this.progressUnlisten();
+    this.progressUnlisten = await listen('ai-setup-progress', (evt) => this.onProgress(evt.payload));
+
+    try {
+      await invoke('install_ai');
+    } catch (e) {
+      this.showError(String(e));
+    }
+  },
+
+  resetProgressUi() {
+    this.backdrop.querySelectorAll('.ai-step').forEach(el => {
+      el.classList.remove('done', 'active');
+      const s = el.querySelector('.ai-step-state');
+      if (s) s.textContent = 'Waiting';
+    });
+    const fill = document.getElementById('aiProgressFill');
+    if (fill) fill.style.width = '0%';
+    const status = document.getElementById('aiProgressStatus');
+    if (status) status.textContent = 'Starting…';
+  },
+
+  onProgress(payload) {
+    if (!payload || !payload.kind) return;
+    const status = document.getElementById('aiProgressStatus');
+    const fill = document.getElementById('aiProgressFill');
+
+    if (payload.kind === 'step') {
+      const idx = payload.index;
+      this.backdrop.querySelectorAll('.ai-step').forEach(el => {
+        const i = parseInt(el.dataset.stepIndex, 10);
+        el.classList.remove('active', 'done');
+        if (i < idx) { el.classList.add('done'); el.querySelector('.ai-step-state').textContent = 'Done'; }
+        else if (i === idx) { el.classList.add('active'); el.querySelector('.ai-step-state').textContent = 'In progress…'; }
+      });
+      if (status) status.textContent = payload.step;
+    } else if (payload.kind === 'progress') {
+      if (fill) fill.style.width = `${payload.percent.toFixed(1)}%`;
+      const mb = (payload.transferred / 1048576).toFixed(1);
+      const totalMb = (payload.total / 1048576).toFixed(1);
+      if (status) status.textContent = `${mb} / ${totalMb} MB · ${payload.percent.toFixed(1)}%${payload.note ? ' · ' + payload.note : ''}`;
+      const activeStep = this.backdrop.querySelector('.ai-step.active .ai-step-state');
+      if (activeStep) activeStep.textContent = `${payload.percent.toFixed(1)}%`;
+    } else if (payload.kind === 'log') {
+      if (status) status.textContent = payload.message;
+    } else if (payload.kind === 'done') {
+      if (fill) fill.style.width = '100%';
+      this.backdrop.querySelectorAll('.ai-step').forEach(el => {
+        el.classList.remove('active'); el.classList.add('done');
+        el.querySelector('.ai-step-state').textContent = 'Done';
+      });
+      this.setState('success');
+      if (this.progressUnlisten) { this.progressUnlisten(); this.progressUnlisten = null; }
+    } else if (payload.kind === 'failed') {
+      this.showError(payload.reason || 'Unknown error');
+    }
+  },
+
+  showError(reason) {
+    const el = document.getElementById('aiErrorReason');
+    if (el) el.textContent = reason;
+    this.setState('error');
+    if (this.progressUnlisten) { this.progressUnlisten(); this.progressUnlisten = null; }
+  },
+
+  async refreshSettings() {
+    try { this.aiStatus = await invoke('get_ai_status'); }
+    catch (e) { return; }
+    const headline = document.getElementById('aiStatusHeadline');
+    const sub = document.getElementById('aiStatusSub');
+    const switchEl = document.getElementById('aiEnabledSwitch');
+    const toggle = document.getElementById('aiEnabledToggle');
+    const installBtn = document.getElementById('aiInstallBtn');
+    if (!headline || !sub || !switchEl || !toggle || !installBtn) return;
+
+    const s = this.aiStatus;
+    if (s.ollama_reachable && s.model_present) {
+      headline.textContent = 'AI assist is ' + (s.ai_enabled ? 'on' : 'off');
+      sub.textContent = 'gemma3:4b · installed locally · nothing leaves your machine';
+      switchEl.style.display = '';
+      toggle.checked = s.ai_enabled;
+      installBtn.style.display = 'none';
+    } else if (s.ollama_reachable && !s.model_present) {
+      headline.textContent = 'Ollama installed — model missing';
+      sub.textContent = 'gemma3:4b is not pulled yet. Install to enable AI features.';
+      switchEl.style.display = 'none';
+      installBtn.style.display = '';
+      installBtn.textContent = 'Pull gemma3:4b (~3.3 GB)';
+    } else {
+      headline.textContent = 'AI assist is off';
+      sub.textContent = 'Not installed. Invigil is using built-in rules only.';
+      switchEl.style.display = 'none';
+      installBtn.style.display = '';
+      installBtn.textContent = 'Install AI (~3.3 GB)';
+    }
+  },
+};
+
 // ─── Init on load ────────────────────────────────────────────────────
 
-init();
+init().then(() => {
+  // Only run onboarding for the main window, never the overlays.
+  if (window.location.hash === '#overlay-leaf' || window.location.hash === '#overlay-drift') return;
+  aiOnboard.init();
+  aiOnboard.checkFirstRun();
+});
