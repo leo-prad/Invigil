@@ -4,15 +4,27 @@
 //! If Ollama is unreachable the call returns `None`, and the
 //! caller should fall back to the Tier 0 default.
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::net::TcpStream;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 const OLLAMA_HOST: &str = "127.0.0.1:11434";
-const MODEL: &str = "gemma:e4b";
 const TIMEOUT: Duration = Duration::from_secs(4);
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn model_slot() -> &'static RwLock<String> {
+    static SLOT: OnceLock<RwLock<String>> = OnceLock::new();
+    SLOT.get_or_init(|| RwLock::new("gemma3:4b".to_string()))
+}
+
+pub fn active_model() -> String { model_slot().read().clone() }
+
+pub fn set_active_model(m: &str) {
+    if !m.is_empty() { *model_slot().write() = m.to_string(); }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LlmVerdict {
@@ -24,8 +36,9 @@ pub enum LlmVerdict {
 /// text. Returns None if Ollama isn't reachable, the request fails, or the response
 /// can't be parsed. Handles both chunked and non-chunked HTTP responses.
 fn ollama_generate(prompt: &str, num_predict: i32) -> Option<String> {
+    let model = active_model();
     let body = serde_json::json!({
-        "model": MODEL,
+        "model": model,
         "prompt": prompt,
         "stream": false,
         "options": { "temperature": 0.0, "num_predict": num_predict }
@@ -333,19 +346,51 @@ pub fn validate_goal(goal: &str, description: &str) -> String {
         return "Write at least a short sentence describing your task.".into();
     }
 
+    // Reject universally-vague goals outright — these describe a *state*, not a task.
+    // A session's whole job is to defend a specific commitment; "focus" alone gives the
+    // classifier nothing to anchor to, and every ambiguous window then reads as drift.
+    let goal_lower = clean_goal.to_lowercase();
+    let vague_goals = [
+        "focus", "focusing", "work", "working", "study", "studying",
+        "productive", "productivity", "grind", "grinding", "hustle",
+        "lock in", "locking in", "deep work", "session", "task",
+        "get work done", "get things done", "get stuff done",
+        "be productive", "stay focused", "concentrate", "concentrating",
+        "chores", "homework", "hw", "school", "class",
+    ];
+    if vague_goals.iter().any(|v| goal_lower == *v) {
+        return format!(
+            "\"{clean_goal}\" isn't a task — it's a state. Name what you're focusing ON. \
+             Try: \"AP Bio Ch 12 — meiosis notes\" or \"CS 101 lab 3 — recursion problems\"."
+        );
+    }
+
+    // Reject when goal + description together contain NO concrete anchor — no subject,
+    // no artifact, no proper noun, no number. Without one of those, the classifier can't
+    // tie any window to the session and everything ambiguous drifts to off-task.
+    if !has_concrete_anchor(clean_goal, clean_desc) {
+        return "Too vague. Name something concrete — a subject, a course code, a tool, a chapter, a specific artifact you're working on. Try: \"Physics 101 — Ch 4 problems 1-8\" or \"React portfolio site — hero section\".".into();
+    }
+
     if !is_ollama_available() {
         return String::new();
     }
 
     let prompt = format!(
-        "Is the following task and description a coherent, meaningful work or study task?\n\
+        "Judge whether the task and description below name a SPECIFIC, CONCRETE thing to work on \
+         — not just a state like \"focus\" or \"be productive.\" A valid task names at least one of: \
+         a subject (math, chemistry), a course code (CS 101, AP Bio), a specific artifact (essay, \
+         lab report, chapter 4 problems), a specific tool (LaTeX, Photoshop, VS Code project), or a \
+         specific deliverable.\n\
          Task: \"{clean_goal}\"\n\
          Description: \"{clean_desc}\"\n\n\
-         Reply ONLY 'valid' if it describes a real task, or 'invalid' if it is random keyboard spam or nonsense."
+         Reply ONLY 'valid' if it names something concrete, or 'invalid' if it is vague, generic, \
+         random spam, or nonsense."
     );
 
+    let model = active_model();
     let body = serde_json::json!({
-        "model": MODEL,
+        "model": model,
         "prompt": prompt,
         "stream": false,
         "options": {
@@ -404,10 +449,79 @@ pub fn validate_goal(goal: &str, description: &str) -> String {
 
     let ans = resp.response.trim().to_lowercase();
     if ans.contains("invalid") {
-        "AI rejected this — it doesn't look like a real task description.".into()
+        "That's too vague to defend against distractions. Name something concrete — a subject, course code, chapter, or specific artifact.".into()
     } else {
         String::new()
     }
+}
+
+/// Does goal + description contain at least one concrete anchor a classifier can latch onto?
+/// Passes on ANY of: a digit (chapter/course numbers), a proper noun (a capitalized word that's
+/// not the first word of a sentence), or one of a broad list of subject/artifact/tool keywords.
+fn has_concrete_anchor(goal: &str, desc: &str) -> bool {
+    let combined = format!("{} {}", goal, desc);
+
+    if combined.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+
+    // Proper-noun heuristic: a capitalized alphabetic word that isn't the first token of
+    // the whole string or the first token after sentence-ending punctuation. Course names,
+    // tool names, teacher names, subject names all satisfy this.
+    let bytes = combined.as_bytes();
+    let mut prev_sentence_end = true; // treat the start as post-sentence-end
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        if b == b'.' || b == b'!' || b == b'?' || b == b'\n' {
+            prev_sentence_end = true;
+            i += 1;
+            continue;
+        }
+        if b.is_ascii_uppercase() && !prev_sentence_end {
+            return true;
+        }
+        // Advance past this token.
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        prev_sentence_end = false;
+    }
+
+    let lower = combined.to_lowercase();
+    const CONCRETE_KEYWORDS: &[&str] = &[
+        // Subjects
+        "math", "algebra", "calculus", "geometry", "trig", "statistics", "stats",
+        "physics", "chemistry", "chem", "biology", "bio", "anatomy", "physiology",
+        "history", "geography", "economics", "econ", "psychology", "sociology",
+        "english", "literature", "essay", "writing", "grammar", "spanish", "french",
+        "german", "latin", "chinese", "japanese", "linguistics",
+        "computer science", "programming", "coding", "cs ", "algorithm",
+        "leetcode", "hackerrank", "codeforces",
+        // Artifacts / deliverables
+        "chapter", "ch ", "problem set", "problem-set", "homework", "assignment",
+        "lab", "lab report", "essay", "paper", "thesis", "project", "presentation",
+        "slides", "deck", "notes", "flashcards", "quiz", "exam", "midterm", "final",
+        "worksheet", "packet", "reading", "textbook", "review", "study guide",
+        "resume", "cover letter", "application", "portfolio",
+        // Tools / apps
+        "python", "javascript", "typescript", "react", "rust", "java", "kotlin",
+        "swift", "c++", "sql", "html", "css", "tailwind", "next.js", "node",
+        "latex", "overleaf", "photoshop", "illustrator", "figma", "blender",
+        "excel", "sheets", "notion", "obsidian", "anki",
+        // Verb-object anchors (imply concreteness)
+        "read ", "write ", "solve", "debug", "implement", "build ",
+        "watch lecture", "practice problems", "review chapter",
+    ];
+    if CONCRETE_KEYWORDS.iter().any(|k| lower.contains(k)) {
+        return true;
+    }
+
+    false
 }
 
 /// Detect repeating short substrings (e.g. "sdc" repeated in "sdcsdcsdcsdc").

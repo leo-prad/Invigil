@@ -900,17 +900,288 @@ function navigateTo(page) {
   document.querySelectorAll('.nav-item[data-page]').forEach(i => i.classList.remove('active'));
   const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
   if (navItem) navItem.classList.add('active');
-  ['dashboard','session','settings'].forEach(p => {
+  ['dashboard','session','bounties','settings'].forEach(p => {
     const el = document.getElementById('page-' + p);
+    if (!el) return;
     el.style.display = p === page ? '' : 'none';
     if (p === page) { el.classList.remove('page-enter'); void el.offsetWidth; el.classList.add('page-enter'); }
   });
   if (page === 'session') renderSessionTimeline();
+  if (page === 'bounties') { refreshBounties(); wireBountyDebugOnce(); }
+}
+
+let _bountyDebugWired = false;
+function wireBountyDebugOnce() {
+  if (_bountyDebugWired) return;
+  const btn = document.getElementById('bountyResetBtn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    try {
+      localStorage.removeItem('bountyCompletedSeen');
+      await invoke('debug_reset_bounties');
+      await refreshBounties();
+    } catch (e) { console.warn('debug_reset_bounties failed:', e); }
+  });
+  _bountyDebugWired = true;
 }
 
 document.querySelectorAll('.nav-item[data-page]').forEach(item => {
   item.addEventListener('click', () => navigateTo(item.dataset.page));
 });
+
+// ─── Bounties ────────────────────────────────────────────────────────
+
+let bountyCountdownInterval = null;
+let bountyRefreshTargetTs = null;
+
+async function refreshBounties() {
+  const grid = document.getElementById('bountyGrid');
+  if (!grid) return;
+  try {
+    const payload = await invoke('get_bounties');
+    // Backend gives us seconds-until-midnight; convert to a wall-clock target so the
+    // JS timer keeps counting down accurately without another IPC round-trip per second.
+    bountyRefreshTargetTs = Date.now() + payload.seconds_until_refresh * 1000;
+    startBountyCountdown();
+    renderBountyGrid(payload.bounties || []);
+  } catch (e) {
+    console.warn('get_bounties failed:', e);
+    grid.innerHTML = '<div class="bounty-empty">Could not load bounties. Try again shortly.</div>';
+  }
+}
+
+const DIFF_ORDER = { easy: 0, medium: 1, hard: 2 };
+
+function renderBountyGrid(bounties) {
+  const grid = document.getElementById('bountyGrid');
+  if (!grid) return;
+  if (!bounties.length) {
+    grid.innerHTML = '<div class="bounty-empty">No bounties yet — check back after midnight.</div>';
+    return;
+  }
+  // Confetti on the first visit after a bounty flips to completed/claimed.
+  const seenKey = 'bountyCompletedSeen';
+  const seen = new Set(JSON.parse(localStorage.getItem(seenKey) || '[]'));
+  const freshWin = bounties.some(b =>
+    (b.status === 'completed' || b.status === 'claimed') && !seen.has(b.id)
+  );
+  if (freshWin) {
+    bounties.forEach(b => {
+      if (b.status === 'completed' || b.status === 'claimed') seen.add(b.id);
+    });
+    localStorage.setItem(seenKey, JSON.stringify([...seen]));
+    setTimeout(burstConfetti, 120);
+  }
+  // Sort easy → medium → hard so the difficulty ramps left-to-right / top-to-bottom.
+  const sorted = [...bounties].sort((a, b) =>
+    (DIFF_ORDER[a.difficulty] ?? 9) - (DIFF_ORDER[b.difficulty] ?? 9)
+  );
+  // One-at-a-time rule: if any bounty on the board is currently accepted, other
+  // still-available bounties render as "locked" so the user can't stack acceptances.
+  const hasActive = sorted.some(b => b.status === 'accepted');
+  grid.innerHTML = sorted.map(b => cardHtml(b, hasActive)).join('');
+
+  grid.querySelectorAll('[data-action="accept"]').forEach(el => {
+    el.addEventListener('click', () => acceptBounty(el.dataset.id));
+  });
+  grid.querySelectorAll('[data-action="claim"]').forEach(el => {
+    el.addEventListener('click', () => claimBounty(el.dataset.id));
+  });
+  grid.querySelectorAll('[data-action="demo-complete"]').forEach(el => {
+    el.addEventListener('click', async () => {
+      try {
+        await invoke('debug_complete_bounty', { id: el.dataset.id });
+        await refreshBounties();
+      } catch (e) { console.warn('debug_complete_bounty failed:', e); }
+    });
+  });
+  grid.querySelectorAll('.bounty-card').forEach(attachTilt);
+}
+
+function cardHtml(b, hasActive) {
+  const diffLabel = b.difficulty.charAt(0).toUpperCase() + b.difficulty.slice(1);
+  const pct = Math.max(0, Math.min(100, (b.progress || 0) * 100));
+  const showProgress = b.status === 'accepted' || b.status === 'completed' || b.status === 'claimed';
+  let btn;
+  if (b.status === 'available') {
+    btn = hasActive
+      ? `<button class="bounty-btn locked" disabled title="Finish or claim your active bounty first">Locked</button>`
+      : `<button class="bounty-btn accept" data-action="accept" data-id="${b.id}">Accept bounty</button>`;
+  } else if (b.status === 'accepted') {
+    btn = `<button class="bounty-btn in-progress" disabled>In progress…</button>`;
+  } else if (b.status === 'completed') {
+    btn = `<button class="bounty-btn claim" data-action="claim" data-id="${b.id}">Claim +${b.reward}</button>`;
+  } else {
+    btn = `<button class="bounty-btn claimed" disabled>Claimed ✓</button>`;
+  }
+  return `
+    <div class="bounty-card ${b.status}">
+      <div class="b-info">
+        <div class="bounty-badges">
+          <span class="bounty-badge diff-${b.difficulty}">${diffLabel}</span>
+        </div>
+        <div class="bounty-title">${escapeHtml(b.title)}</div>
+        <div class="bounty-desc">${escapeHtml(b.description)}</div>
+      </div>
+      <div class="b-reward-slot">
+        <div class="bounty-reward">
+          <span class="num">+${b.reward}</span>
+          <span class="lbl">pts</span>
+        </div>
+      </div>
+      <div class="b-progress-slot">
+        ${showProgress ? `
+          <div class="bounty-progress" style="min-width:220px;">
+            <div class="bounty-progress-track"><div class="bounty-progress-fill" style="width:${pct}%"></div></div>
+            <div class="bounty-progress-label">${escapeHtml(b.progress_label || '')}</div>
+          </div>` : ''}
+      </div>
+      <div class="b-action-slot">
+        ${btn}
+        ${b.status === 'accepted' ? `<button class="bounty-card-demo" data-action="demo-complete" data-id="${b.id}" title="Skip the work — flip to Completed for demo">⚡ Force complete</button>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Subtle cursor-follow 3D tilt on hover. Max ±5deg on either axis, animated via
+ * transform. Kept intentionally soft so it reads as material response, not a
+ * gimmick — no exaggerated depth, no glare layer, no bouncy spring.
+ */
+function attachTilt(card) {
+  const MAX_DEG = 1.8;
+  let raf = 0;
+  const rest = () => {
+    if (raf) cancelAnimationFrame(raf);
+    card.style.transform = '';
+  };
+  const onMove = (e) => {
+    if (e.target.closest('button, a, .bounty-card-demo')) { rest(); return; }
+    const rect = card.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    const ry = (x - 0.5) * (MAX_DEG * 2);
+    const rx = -(y - 0.5) * (MAX_DEG * 2);
+    if (raf) cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      card.style.transform = `perspective(1400px) rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg) translateZ(0)`;
+    });
+  };
+  const onLeave = rest;
+  card.addEventListener('mousemove', onMove);
+  card.addEventListener('mouseleave', onLeave);
+}
+
+function burstConfetti() {
+  const layer = document.createElement('div');
+  layer.className = 'confetti-layer';
+  document.body.appendChild(layer);
+  const colors = ['#c47f4a', '#c9a34a', '#5a7a44', '#3a4d33', '#a8b89a', '#8b6bb0'];
+  const count = 90;
+  const vw = window.innerWidth;
+  for (let i = 0; i < count; i++) {
+    const p = document.createElement('div');
+    p.className = 'confetti-piece';
+    const startX = Math.random() * vw;
+    const dx = (Math.random() - 0.5) * 260;
+    const rot = (Math.random() * 720 + 360) * (Math.random() < 0.5 ? -1 : 1);
+    const dur = 2.4 + Math.random() * 1.6;
+    const delay = Math.random() * 0.35;
+    const w = 6 + Math.random() * 8;
+    const h = 10 + Math.random() * 8;
+    p.style.left = startX + 'px';
+    p.style.width = w + 'px';
+    p.style.height = h + 'px';
+    p.style.background = colors[i % colors.length];
+    p.style.setProperty('--dx', dx + 'px');
+    p.style.setProperty('--rot', rot + 'deg');
+    p.style.animationDuration = dur + 's';
+    p.style.animationDelay = delay + 's';
+    layer.appendChild(p);
+  }
+  setTimeout(() => layer.remove(), 4500);
+}
+
+/**
+ * Prompt the user before actually accepting. Since only one bounty at a time is
+ * allowed, this is a soft-lock — makes the commitment explicit before the other
+ * cards lock themselves out.
+ */
+function acceptBounty(id) {
+  const grid = document.getElementById('bountyGrid');
+  const card = grid?.querySelector(`.bounty-card [data-id="${id}"]`)?.closest('.bounty-card');
+  const title = card?.querySelector('.bounty-title')?.textContent?.trim() || '';
+  const backdrop = document.getElementById('bountyConfirmBackdrop');
+  const targetEl = document.getElementById('bountyConfirmTarget');
+  const yesBtn = document.getElementById('bountyConfirmYes');
+  const noBtn = document.getElementById('bountyConfirmNo');
+  if (!backdrop || !yesBtn || !noBtn) return;
+  if (targetEl) targetEl.textContent = title;
+  backdrop.style.display = 'flex';
+
+  const cleanup = () => {
+    backdrop.style.display = 'none';
+    yesBtn.removeEventListener('click', onYes);
+    noBtn.removeEventListener('click', onNo);
+    backdrop.removeEventListener('click', onBackdrop);
+    document.removeEventListener('keydown', onKey);
+  };
+  const onYes = async () => {
+    cleanup();
+    try {
+      await invoke('accept_bounty', { id });
+      await refreshBounties();
+    } catch (e) {
+      console.warn('accept_bounty failed:', e);
+    }
+  };
+  const onNo = () => cleanup();
+  const onBackdrop = (e) => { if (e.target === backdrop) cleanup(); };
+  const onKey = (e) => { if (e.key === 'Escape') cleanup(); };
+  yesBtn.addEventListener('click', onYes);
+  noBtn.addEventListener('click', onNo);
+  backdrop.addEventListener('click', onBackdrop);
+  document.addEventListener('keydown', onKey);
+}
+
+async function claimBounty(id) {
+  try {
+    const reward = await invoke('claim_bounty', { id });
+    // Refresh dashboard totals silently so the points count elsewhere is current.
+    try { liveData = await invoke('get_dashboard_data'); } catch(e) {}
+    await refreshBounties();
+    console.log(`Bounty claimed: +${reward} pts`);
+  } catch (e) {
+    console.warn('claim_bounty failed:', e);
+  }
+}
+
+function startBountyCountdown() {
+  if (bountyCountdownInterval) return;
+  const tick = () => {
+    const el = document.getElementById('bountyCountdown');
+    if (!el || bountyRefreshTargetTs == null) return;
+    let secs = Math.max(0, Math.round((bountyRefreshTargetTs - Date.now()) / 1000));
+    if (secs === 0) {
+      // Midnight hit — pull the fresh pool. Backend will regenerate today's row.
+      refreshBounties();
+      return;
+    }
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    el.textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  };
+  tick();
+  bountyCountdownInterval = setInterval(tick, 1000);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[c]);
+}
 
 // ─── Session timeline ────────────────────────────────────────────────
 
@@ -1043,6 +1314,9 @@ document.getElementById('summaryDoneBtn').addEventListener('click', async () => 
   resetSummaryAnimation();
   // Refresh dashboard data with await so trends and tiles render latest data
   try { liveData = await invoke('get_dashboard_data'); } catch(e) {}
+  // Bounty progress recomputes server-side on end_session, but if the user's already on
+  // the bounties page (they aren't here, but for future navigation) it's cheap to prime.
+  try { await invoke('get_bounties'); } catch(e) {}
   navigateTo('dashboard');
   setMode({ mode: 'overall', start: null, end: null });
   updateGreeting();
@@ -1395,7 +1669,7 @@ async function submitWorkClaim(reason) {
       cyberJustifySubmit.textContent = "Confirm — it's work";
     }
     if (cyberJustifyInput) cyberJustifyInput.disabled = false;
-    showJustifyError(outcome.message || 'That didn\'t land. Try again — or click "Just a break" and take it.');
+    showJustifyError(outcome.message || 'That didn\'t land. Try again — or click "Get back to work".');
     if (cyberJustifyInput) setTimeout(() => cyberJustifyInput.focus(), 0);
     return;
   }
@@ -2348,6 +2622,237 @@ function updateAdvPanel(s) {
   if (memEl) memEl.textContent = `${mem.toFixed(0)} MB`;
 }
 
+// ─── AI onboarding ──────────────────────────────────────────────────
+
+const aiOnboard = {
+  backdrop: null,
+  states: {},
+  progressUnlisten: null,
+  aiStatus: null,
+
+  init() {
+    this.backdrop = document.getElementById('aiOnboardBackdrop');
+    if (!this.backdrop) return;
+    this.states = {
+      pitch: this.backdrop.querySelector('[data-ai-state="pitch"]'),
+      progress: this.backdrop.querySelector('[data-ai-state="progress"]'),
+      success: this.backdrop.querySelector('[data-ai-state="success"]'),
+      error: this.backdrop.querySelector('[data-ai-state="error"]'),
+    };
+
+    document.getElementById('aiOptOutBtn')?.addEventListener('click', () => this.optOut());
+    document.getElementById('aiOptInBtn')?.addEventListener('click', () => this.startInstall());
+    document.getElementById('aiUseExistingBtn')?.addEventListener('click', () => this.useExisting());
+    document.getElementById('aiHideBtn')?.addEventListener('click', () => this.hide());
+    document.getElementById('aiDoneBtn')?.addEventListener('click', () => {
+      this.hide();
+      this.refreshSettings();
+    });
+    document.getElementById('aiLaterBtn')?.addEventListener('click', () => this.hide());
+    document.getElementById('aiRetryBtn')?.addEventListener('click', () => this.startInstall());
+
+    document.getElementById('aiInstallBtn')?.addEventListener('click', () => this.showPitch());
+    document.getElementById('aiEnabledToggle')?.addEventListener('change', async (e) => {
+      try { await invoke('set_ai_enabled', { enabled: e.target.checked }); }
+      catch (err) { console.warn('set_ai_enabled failed', err); }
+      this.refreshSettings();
+    });
+  },
+
+  async checkFirstRun() {
+    try {
+      this.aiStatus = await invoke('get_ai_status');
+    } catch (e) {
+      console.warn('get_ai_status failed:', e);
+      return;
+    }
+    this.refreshSettings();
+    if (!this.aiStatus.setup_seen) {
+      this.showPitch();
+    }
+  },
+
+  setState(name) {
+    for (const [k, el] of Object.entries(this.states)) {
+      if (el) el.style.display = (k === name) ? '' : 'none';
+    }
+  },
+
+  async showPitch() {
+    if (!this.backdrop) return;
+    this.setState('pitch');
+    this.backdrop.style.display = 'flex';
+    document.body.classList.add('ai-onboard-open');
+    // Probe local Ollama for reusable models.
+    this.existingModel = null;
+    try {
+      const models = await invoke('list_local_models');
+      const pick = (models || []).find(m => m.is_compatible);
+      const card = document.getElementById('aiExistingCard');
+      const nameEl = document.getElementById('aiExistingName');
+      if (pick && card && nameEl) {
+        this.existingModel = pick.name;
+        const gb = (pick.size_bytes / (1024**3)).toFixed(1);
+        nameEl.textContent = `${pick.name}  ·  ${gb} GB`;
+        card.style.display = '';
+      } else if (card) {
+        card.style.display = 'none';
+      }
+    } catch (e) { /* Ollama not running — no card */ }
+  },
+
+  async useExisting() {
+    if (!this.existingModel) return;
+    try {
+      await invoke('set_ai_model', { model: this.existingModel });
+      await invoke('mark_ai_setup_seen', { optedIn: true });
+    } catch (e) { console.warn('adopt existing model failed', e); }
+    this.setState('success');
+    this.refreshSettings();
+  },
+
+  hide() {
+    if (this.backdrop) this.backdrop.style.display = 'none';
+    document.body.classList.remove('ai-onboard-open');
+    if (this.progressUnlisten) { this.progressUnlisten(); this.progressUnlisten = null; }
+  },
+
+  async optOut() {
+    try { await invoke('mark_ai_setup_seen', { optedIn: false }); }
+    catch (e) { console.warn('mark_ai_setup_seen failed', e); }
+    this.hide();
+    this.refreshSettings();
+  },
+
+  async startInstall() {
+    this.setState('progress');
+    this.resetProgressUi();
+    // Mark as seen up-front so if the user closes the app mid-install we don't re-prompt.
+    try { await invoke('mark_ai_setup_seen', { optedIn: true }); } catch (e) {}
+
+    if (this.progressUnlisten) this.progressUnlisten();
+    this.progressUnlisten = await listen('ai-setup-progress', (evt) => this.onProgress(evt.payload));
+
+    try {
+      await invoke('install_ai');
+    } catch (e) {
+      this.showError(String(e));
+    }
+  },
+
+  resetProgressUi() {
+    this.backdrop.querySelectorAll('.ai-step').forEach(el => {
+      el.classList.remove('done', 'active');
+      const s = el.querySelector('.ai-step-state');
+      if (s) s.textContent = 'Waiting';
+    });
+    const fill = document.getElementById('aiProgressFill');
+    if (fill) fill.style.width = '0%';
+    const status = document.getElementById('aiProgressStatus');
+    if (status) status.textContent = 'Starting…';
+  },
+
+  onProgress(payload) {
+    if (!payload || !payload.kind) return;
+    const status = document.getElementById('aiProgressStatus');
+    const fill = document.getElementById('aiProgressFill');
+
+    if (payload.kind === 'step') {
+      const idx = payload.index;
+      this.backdrop.querySelectorAll('.ai-step').forEach(el => {
+        const i = parseInt(el.dataset.stepIndex, 10);
+        el.classList.remove('active', 'done');
+        if (i < idx) { el.classList.add('done'); el.querySelector('.ai-step-state').textContent = 'Done'; }
+        else if (i === idx) { el.classList.add('active'); el.querySelector('.ai-step-state').textContent = 'In progress…'; }
+      });
+      if (status) status.textContent = payload.step;
+    } else if (payload.kind === 'progress') {
+      if (fill) fill.style.width = `${payload.percent.toFixed(1)}%`;
+      const mb = (payload.transferred / 1048576).toFixed(1);
+      const totalMb = (payload.total / 1048576).toFixed(1);
+      if (status) status.textContent = `${mb} / ${totalMb} MB · ${payload.percent.toFixed(1)}%${payload.note ? ' · ' + payload.note : ''}`;
+      const activeStep = this.backdrop.querySelector('.ai-step.active .ai-step-state');
+      if (activeStep) activeStep.textContent = `${payload.percent.toFixed(1)}%`;
+    } else if (payload.kind === 'log') {
+      if (status) status.textContent = payload.message;
+    } else if (payload.kind === 'done') {
+      if (fill) fill.style.width = '100%';
+      this.backdrop.querySelectorAll('.ai-step').forEach(el => {
+        el.classList.remove('active'); el.classList.add('done');
+        el.querySelector('.ai-step-state').textContent = 'Done';
+      });
+      this.setState('success');
+      if (this.progressUnlisten) { this.progressUnlisten(); this.progressUnlisten = null; }
+    } else if (payload.kind === 'failed') {
+      this.showError(payload.reason || 'Unknown error');
+    }
+  },
+
+  showError(reason) {
+    const el = document.getElementById('aiErrorReason');
+    if (el) el.textContent = reason;
+    this.setState('error');
+    if (this.progressUnlisten) { this.progressUnlisten(); this.progressUnlisten = null; }
+  },
+
+  applyDashboardLock(active) {
+    const slot = document.getElementById('mascotSlot');
+    const lock = document.getElementById('mascotLock');
+    const bubble = document.querySelector('.mascot-bubble');
+    if (!slot || !lock) return;
+    if (active) {
+      slot.classList.remove('locked');
+      lock.style.display = 'none';
+    } else {
+      slot.classList.add('locked');
+      lock.style.display = 'flex';
+      if (bubble) {
+        bubble.innerHTML = 'Enable local AI to unlock Xeno\'s take.' +
+          '<span class="sig">— Settings → AI assistance</span>';
+      }
+    }
+  },
+
+  async refreshSettings() {
+    try { this.aiStatus = await invoke('get_ai_status'); }
+    catch (e) { return; }
+    const aiActive = this.aiStatus.ai_enabled && this.aiStatus.ollama_reachable && this.aiStatus.model_present;
+    this.applyDashboardLock(aiActive);
+    const headline = document.getElementById('aiStatusHeadline');
+    const sub = document.getElementById('aiStatusSub');
+    const switchEl = document.getElementById('aiEnabledSwitch');
+    const toggle = document.getElementById('aiEnabledToggle');
+    const installBtn = document.getElementById('aiInstallBtn');
+    if (!headline || !sub || !switchEl || !toggle || !installBtn) return;
+
+    const s = this.aiStatus;
+    if (s.ollama_reachable && s.model_present) {
+      headline.textContent = 'AI assist is ' + (s.ai_enabled ? 'on' : 'off');
+      sub.textContent = 'gemma3:4b · installed locally · nothing leaves your machine';
+      switchEl.style.display = '';
+      toggle.checked = s.ai_enabled;
+      installBtn.style.display = 'none';
+    } else if (s.ollama_reachable && !s.model_present) {
+      headline.textContent = 'Ollama installed — model missing';
+      sub.textContent = 'gemma3:4b is not pulled yet. Install to enable AI features.';
+      switchEl.style.display = 'none';
+      installBtn.style.display = '';
+      installBtn.textContent = 'Pull gemma3:4b (~3.3 GB)';
+    } else {
+      headline.textContent = 'AI assist is off';
+      sub.textContent = 'Not installed. Invigil is using built-in rules only.';
+      switchEl.style.display = 'none';
+      installBtn.style.display = '';
+      installBtn.textContent = 'Install AI (~3.3 GB)';
+    }
+  },
+};
+
 // ─── Init on load ────────────────────────────────────────────────────
 
-init();
+init().then(() => {
+  // Only run onboarding for the main window, never the overlays.
+  if (window.location.hash === '#overlay-leaf' || window.location.hash === '#overlay-drift') return;
+  aiOnboard.init();
+  aiOnboard.checkFirstRun();
+});

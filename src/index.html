@@ -34,6 +34,16 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
           Session
         </div>
+        <div class="nav-item" data-page="bounties">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 4H6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"/>
+            <rect x="8" y="2" width="8" height="4" rx="1"/>
+            <path d="M8 12h6"/>
+            <path d="M8 16h4"/>
+            <path d="M17.4 12.6l2 2-4.2 4.2H13v-2.2z"/>
+          </svg>
+          Bounties
+        </div>
         <div class="nav-item" data-page="settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.6V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.6-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.6-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3 1.7 1.7 0 001-1.6V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.6 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9 1.7 1.7 0 001.6 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.6 1z"/></svg>
           Settings
@@ -41,7 +51,13 @@
       </nav>
 
       <!-- Mascot bottom-left with bubble underneath -->
-      <div class="mascot-slot">
+      <div class="mascot-slot" id="mascotSlot">
+        <div class="mascot-lock" id="mascotLock" style="display:none;" title="Local AI model needed">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="11" width="16" height="10" rx="2"/>
+            <path d="M8 11V7a4 4 0 018 0v4"/>
+          </svg>
+        </div>
         <div class="mascot-fig">
           <svg viewBox="0 0 100 110" xmlns="http://www.w3.org/2000/svg">
             <defs>
@@ -95,7 +111,6 @@
 
       <div class="top">
         <div>
-          <div class="eyebrow"><span class="dot"></span> Dashboard</div>
           <h1 class="greeting">Good afternoon, Leo — <em>you're on a roll.</em></h1>
           <div class="greeting-sub">Twelve days locked in. Saturday, Aug 8 · no session running.</div>
         </div>
@@ -349,12 +364,41 @@
       </div>
       <!-- /page-session -->
 
+      <!-- ================= BOUNTIES PAGE ================= -->
+      <div class="page" id="page-bounties" style="display:none;">
+
+        <div class="top">
+          <div>
+            <h1 class="greeting">Three bounties. <em>Pick your ground.</em></h1>
+            <div class="greeting-sub">Challenges from Professor Xeno. Complete them for bonus points — they refresh at midnight.</div>
+          </div>
+          <div class="bounty-top-right">
+            <button class="bounty-debug-btn" id="bountyResetBtn" title="Wipe today's pool and regenerate (demo only)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 1 1-3-6.7"/>
+                <path d="M21 4v5h-5"/>
+              </svg>
+              Reset (demo)
+            </button>
+            <div class="bounty-refresh">
+              <div class="bounty-refresh-label">Refreshes in</div>
+              <div class="bounty-refresh-time" id="bountyCountdown">--:--:--</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bounty-grid" id="bountyGrid">
+          <!-- populated by JS -->
+        </div>
+
+      </div>
+      <!-- /page-bounties -->
+
       <!-- ================= SETTINGS PAGE ================= -->
       <div class="page" id="page-settings" style="display:none;">
 
         <div class="top">
           <div>
-            <div class="eyebrow"><span class="dot"></span> Settings</div>
             <h1 class="greeting">Tune how <em>Invigil</em> watches.</h1>
             <div class="greeting-sub">Changes apply to future sessions — this stays on-device.</div>
           </div>
@@ -384,10 +428,161 @@
           </div>
         </section>
 
+        <section class="card settings-card" id="aiSettingsCard">
+          <div class="card-head">
+            <div class="card-title">AI assistance</div>
+            <div class="card-meta">local model for smarter drift detection</div>
+          </div>
+          <p class="settings-desc">
+            When on, Invigil uses a small local AI model (gemma3:4b via Ollama) to judge
+            borderline windows in context of your goal. Runs entirely on your machine — nothing
+            uploads anywhere. When off, Invigil falls back to built-in rules only.
+          </p>
+          <div class="ai-status-row">
+            <div class="ai-status-labels">
+              <div class="ai-status-headline" id="aiStatusHeadline">Checking…</div>
+              <div class="ai-status-sub" id="aiStatusSub"></div>
+            </div>
+            <div class="ai-status-controls">
+              <label class="switch" id="aiEnabledSwitch" style="display:none;">
+                <input type="checkbox" id="aiEnabledToggle">
+                <span class="switch-slider"></span>
+              </label>
+              <button class="btn primary" id="aiInstallBtn" style="display:none;">
+                Install AI (~3.3 GB)
+              </button>
+            </div>
+          </div>
+        </section>
+
       </div>
       <!-- /page-settings -->
 
     </main>
+  </div>
+</div>
+
+<!-- ================= AI ONBOARDING MODAL ================= -->
+<div class="modal-backdrop ai-onboard-backdrop" id="aiOnboardBackdrop" style="display:none;">
+  <div class="modal-card ai-onboard-card">
+
+    <!-- Pitch state -->
+    <div class="ai-onboard-state" data-ai-state="pitch">
+      <h2 class="ai-onboard-title">Want <span class="hero-word">smarter</span> distraction detection?</h2>
+      <p class="ai-onboard-lede">
+        Allow Invigil to run a small <em class="pop">local</em> AI model to better optimize your
+        monitoring experience while you're on task. It judges what you're doing more accurately —
+        like, is <em>this</em> YouTube video an educational one or a distraction?
+        <em class="pop">Nothing</em> ever leaves your PC.
+      </p>
+
+      <div class="ai-existing-card" id="aiExistingCard" style="display:none;">
+        <div class="ai-existing-badge">Found on your machine</div>
+        <div class="ai-existing-body">
+          <div class="ai-existing-name" id="aiExistingName">—</div>
+          <div class="ai-existing-note">
+            Already installed via Ollama. Skip the download and use this instead.
+          </div>
+        </div>
+        <button class="btn primary" id="aiUseExistingBtn">Use this model</button>
+      </div>
+
+      <div class="ai-compare">
+        <div class="ai-compare-col recommended">
+          <span class="ai-compare-label">Opt in</span>
+          <span class="ai-compare-head">Full AI assistance</span>
+          <span class="ai-compare-body">
+            Smarter monitoring, detection, and goal validation.
+            Also adapts to your work style and gives you personalized feedback.
+          </span>
+        </div>
+        <div class="ai-compare-col">
+          <span class="ai-compare-label">Opt out</span>
+          <span class="ai-compare-head">Rules only</span>
+          <span class="ai-compare-body">
+            Generic detection with <em>no</em> personalization. Relies on built-in
+            rules and has a high chance of flagging things which are <em>really</em> work.
+          </span>
+        </div>
+      </div>
+
+      <div class="ai-size-note">
+        <span>Downloads Ollama + Gemma3:4b (local AI model)</span>
+        <strong>~3.3&nbsp;GB · one-time</strong>
+      </div>
+
+      <div class="ai-onboard-actions">
+        <button class="btn ghost" id="aiOptOutBtn">Skip for now</button>
+        <button class="btn primary" id="aiOptInBtn">Install AI (recommended)</button>
+      </div>
+    </div>
+
+    <!-- Progress state -->
+    <div class="ai-onboard-state" data-ai-state="progress" style="display:none;">
+      <h2 class="ai-onboard-title">Setting up AI assist</h2>
+      <p class="ai-onboard-lede">You can keep using Invigil. AI features will switch on when this finishes.</p>
+
+      <div class="ai-progress-block">
+        <div class="ai-step" data-step-index="1">
+          <span class="ai-step-name">1. Download Ollama installer</span>
+          <span class="ai-step-state">Waiting</span>
+        </div>
+        <div class="ai-step" data-step-index="2">
+          <span class="ai-step-name">2. Install Ollama service</span>
+          <span class="ai-step-state">Waiting</span>
+        </div>
+        <div class="ai-step" data-step-index="3">
+          <span class="ai-step-name">3. Pull gemma3:4b</span>
+          <span class="ai-step-state">Waiting</span>
+        </div>
+        <div class="ai-progress-bar"><i id="aiProgressFill"></i></div>
+        <div class="ai-step" data-step-index="4">
+          <span class="ai-step-name">4. Finishing up</span>
+          <span class="ai-step-state">Waiting</span>
+        </div>
+      </div>
+
+      <div class="ai-status-line" id="aiProgressStatus">Starting…</div>
+
+      <div class="ai-onboard-actions">
+        <button class="btn ghost" id="aiHideBtn">Hide window</button>
+      </div>
+    </div>
+
+    <!-- Success state -->
+    <div class="ai-onboard-state" data-ai-state="success" style="display:none;">
+      <div class="ai-success-head">
+        <div class="ai-success-icon">✓</div>
+        <div>
+          <h2 class="ai-onboard-title" style="margin-bottom:2px;">AI assist is on</h2>
+          <p class="ai-onboard-lede">Ambiguous windows will now be judged in context of your session goal.</p>
+        </div>
+      </div>
+      <div class="ai-size-note">
+        <span>Model</span>
+        <strong style="color: var(--olive-deep);">gemma3:4b · installed</strong>
+      </div>
+      <p class="ai-onboard-lede" style="font-size:13px; color:var(--muted);">
+        You can turn this off any time under <strong>Settings → AI assistance</strong>.
+      </p>
+      <div class="ai-onboard-actions">
+        <button class="btn primary" id="aiDoneBtn">Start using Invigil</button>
+      </div>
+    </div>
+
+    <!-- Error state -->
+    <div class="ai-onboard-state" data-ai-state="error" style="display:none;">
+      <h2 class="ai-onboard-title">Couldn't finish AI setup</h2>
+      <p class="ai-onboard-lede">Invigil will keep running with rules-only detection. You can retry when you're ready.</p>
+      <div class="ai-error-strip">
+        <strong>Setup failed</strong> — <span id="aiErrorReason">unknown error</span>
+      </div>
+      <div class="ai-onboard-actions">
+        <button class="btn ghost" id="aiLaterBtn">I'll do it later</button>
+        <button class="btn primary" id="aiRetryBtn">Retry</button>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -497,6 +692,20 @@
   </div>
 </div>
 
+<!-- ================= BOUNTY ACCEPT CONFIRMATION ================= -->
+<div class="modal-backdrop" id="bountyConfirmBackdrop" style="display:none;">
+  <div class="modal-card bounty-confirm-card">
+    <h2>Are you sure?</h2>
+    <div class="bounty-confirm-body">
+      You can only choose <em>1 bounty</em> at a time to finish.
+    </div>
+    <div class="bounty-confirm-actions">
+      <button class="btn ghost" id="bountyConfirmNo">No</button>
+      <button class="btn primary" id="bountyConfirmYes">Yes, accept</button>
+    </div>
+  </div>
+</div>
+
 <!-- ================= CYBERPUNK DRIFT ALERT OVERLAY ================= -->
 <div class="cyber-overlay" id="cyberOverlay" style="display:none;">
   <div class="cyber-vignette"></div>
@@ -508,7 +717,7 @@
     <p class="cyber-sub" id="cyberSub"></p>
     <div class="cyber-actions" id="cyberActions">
       <button class="cyber-btn ghost" id="cyberWorkBtn">This is actually work</button>
-      <button class="cyber-btn primary" id="cyberBackBtn">Just a break</button>
+      <button class="cyber-btn primary" id="cyberBackBtn">Get back to work</button>
     </div>
     <div class="cyber-justify" id="cyberJustify" style="display:none;">
       <div class="cyber-justify-label">Explain how this is actually work — the local AI will fact-check you:</div>

@@ -1,3 +1,5 @@
+mod ai_setup;
+mod bounties;
 mod classifier;
 mod db;
 mod llm;
@@ -105,6 +107,13 @@ fn end_session(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<sess
     }
 
     let summary = state.session_mgr.stop();
+
+    // Any accepted bounty may have flipped to `completed` after this session — recompute
+    // so the UI shows a Claim button as soon as they open Bounties again.
+    let today = bounties::local_today();
+    bounties::ensure_today_pool(&state.db);
+    bounties::refresh_progress(&state.db, &today);
+
     Ok(summary)
 }
 
@@ -338,7 +347,7 @@ fn shallow_reason_check(reason: &str) -> Option<&'static str> {
         "want a rest", "chill for", "relax for",
     ];
     if BREAK_PATTERNS.iter().any(|p| lower.contains(p)) {
-        return Some("Breaks aren't work. If you need one, that's fine — click \"Just a break\" and take it, don't fake a reason.");
+        return Some("Breaks aren't work. If you need one, take it — don't fake a reason.");
     }
     // Pure-filler shorthand. Anything that reads like a shrug rather than an explanation.
     const FILLER_ONLY: &[&str] = &[
@@ -377,7 +386,7 @@ fn submit_work_justification(
     if reason_trimmed.is_empty() {
         return Ok(JustificationOutcome {
             verdict: "rejected".into(),
-            message: Some("You have to actually explain. \"Trust me\" isn't a reason.".into()),
+            message: Some("You didn't write anything. Explain how this window helps your task.".into()),
         });
     }
 
@@ -430,12 +439,131 @@ fn submit_work_justification(
     }
 }
 
+// --- Bounty commands ---
+
+#[derive(serde::Serialize)]
+struct BountiesPayload {
+    bounties: Vec<db::Bounty>,
+    /// Local seconds remaining until midnight, when the pool refreshes.
+    seconds_until_refresh: i64,
+}
+
+#[tauri::command]
+fn get_bounties(state: tauri::State<'_, AppState>) -> Result<BountiesPayload, String> {
+    let today = bounties::local_today();
+    bounties::ensure_today_pool(&state.db);
+    bounties::refresh_progress(&state.db, &today);
+    let list = state.db.get_bounties_for_day(&today).map_err(|e| e.to_string())?;
+    Ok(BountiesPayload {
+        bounties: list,
+        seconds_until_refresh: bounties::seconds_until_local_midnight(),
+    })
+}
+
+#[tauri::command]
+fn accept_bounty(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    bounties::accept(&state.db, &id)
+}
+
+#[tauri::command]
+fn claim_bounty(state: tauri::State<'_, AppState>, id: String) -> Result<i64, String> {
+    bounties::claim(&state.db, &id)
+}
+
+// Temp demo helpers — remove when demo mode is retired.
+#[tauri::command]
+fn debug_reset_bounties(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    bounties::debug_reset(&state.db)
+}
+
+#[tauri::command]
+fn debug_complete_bounty(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    bounties::debug_complete(&state.db, &id)
+}
+
 #[tauri::command]
 fn get_session_intervals(
     state: tauri::State<'_, AppState>,
     session_id: String,
 ) -> Result<Vec<db::Interval>, String> {
     state.db.get_session_intervals(&session_id).map_err(|e| e.to_string())
+}
+
+// ─── AI setup commands ──────────────────────────────────────────────
+
+#[tauri::command]
+fn get_ai_status(state: tauri::State<'_, AppState>) -> Result<ai_setup::AiStatus, String> {
+    let setup_seen = state.db.get_setting("ai_setup_seen").unwrap_or_else(|_| "false".into()) == "true";
+    let ai_enabled = state.db.get_setting("ai_enabled").unwrap_or_else(|_| "false".into()) == "true";
+    let active_model = state.db.get_setting("ai_model").unwrap_or_else(|_| ai_setup::DEFAULT_MODEL.into());
+    let ollama_reachable = ai_setup::ollama_reachable();
+    let model_present = if ollama_reachable {
+        ai_setup::model_present(&active_model)
+    } else { false };
+    Ok(ai_setup::AiStatus {
+        setup_seen, ai_enabled, ollama_reachable, model_present, active_model,
+    })
+}
+
+#[tauri::command]
+fn list_local_models() -> Result<Vec<ai_setup::LocalModel>, String> {
+    Ok(ai_setup::list_models())
+}
+
+#[tauri::command]
+fn set_ai_model(
+    state: tauri::State<'_, AppState>,
+    model: String,
+) -> Result<(), String> {
+    state.db.set_setting("ai_model", &model).map_err(|e| e.to_string())?;
+    llm::set_active_model(&model);
+    Ok(())
+}
+
+#[tauri::command]
+fn mark_ai_setup_seen(
+    state: tauri::State<'_, AppState>,
+    opted_in: bool,
+) -> Result<(), String> {
+    state.db.set_setting("ai_setup_seen", "true").map_err(|e| e.to_string())?;
+    state.db.set_setting("ai_enabled", if opted_in { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+    state.db.set_setting("tier1_enabled", if opted_in { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_ai_enabled(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    state.db.set_setting("ai_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+    state.db.set_setting("tier1_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn install_ai(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    // Fire and forget — progress arrives via `ai-setup-progress` events.
+    let db = state.db.clone();
+    let app_bg = app.clone();
+    let model = state.db.get_setting("ai_model").unwrap_or_else(|_| ai_setup::DEFAULT_MODEL.into());
+    let model_for_check = model.clone();
+    std::thread::spawn(move || {
+        ai_setup::run_install(app_bg.clone(), model);
+        // After success, flip the enabled flag automatically so the app
+        // starts using AI immediately.
+        if ai_setup::ollama_reachable() && ai_setup::model_present(&model_for_check) {
+            let _ = db.set_setting("ai_enabled", "true");
+            let _ = db.set_setting("tier1_enabled", "true");
+            let _ = db.set_setting("ai_setup_seen", "true");
+            llm::set_active_model(&model_for_check);
+        }
+    });
+    Ok(())
 }
 
 // ─── App entry ───────────────────────────────────────────────────────
@@ -446,6 +574,11 @@ pub fn run() {
 
     let db = Database::new().expect("Failed to initialize database");
     let session_mgr = SessionManager::new(db.clone());
+
+    // Prime the active LLM model from settings (defaults to gemma3:4b if unset).
+    if let Ok(m) = db.get_setting("ai_model") {
+        llm::set_active_model(&m);
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -489,6 +622,19 @@ pub fn run() {
             get_ollama_status,
             try_launch_ollama,
             submit_work_justification,
+            // Bounties
+            get_bounties,
+            accept_bounty,
+            claim_bounty,
+            debug_reset_bounties,
+            debug_complete_bounty,
+            // AI setup
+            get_ai_status,
+            mark_ai_setup_seen,
+            set_ai_enabled,
+            install_ai,
+            list_local_models,
+            set_ai_model,
         ])
         .setup(|app| {
             // Bring main window to front if found
