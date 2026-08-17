@@ -12,7 +12,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 const OLLAMA_HOST: &str = "127.0.0.1:11434";
-pub const MODEL: &str = "gemma3:4b";
+pub const DEFAULT_MODEL: &str = "gemma3:4b";
 const OLLAMA_INSTALLER_URL: &str = "https://ollama.com/download/OllamaSetup.exe";
 
 #[derive(Debug, Clone, Serialize)]
@@ -21,6 +21,14 @@ pub struct AiStatus {
     pub ai_enabled: bool,
     pub ollama_reachable: bool,
     pub model_present: bool,
+    pub active_model: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalModel {
+    pub name: String,
+    pub size_bytes: u64,
+    pub is_compatible: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,6 +61,47 @@ pub fn model_present(model: &str) -> bool {
     };
     // Cheap contains — Ollama returns { models: [{name, ...}, ...] }
     body.contains(&format!("\"{model}\""))
+}
+
+/// Model families whose 3–7B variants Invigil can classify with. If a user
+/// already has one installed we can adopt it instead of pulling gemma3:4b.
+const COMPATIBLE_PREFIXES: &[&str] = &[
+    "gemma", "llama3", "llama3.1", "llama3.2", "llama3.3",
+    "qwen2.5", "qwen3", "mistral", "phi3", "phi4", "deepseek",
+];
+
+fn is_compatible(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    COMPATIBLE_PREFIXES.iter().any(|p| lower.starts_with(p))
+}
+
+#[derive(serde::Deserialize)]
+struct TagsResp {
+    #[serde(default)]
+    models: Vec<TagEntry>,
+}
+#[derive(serde::Deserialize)]
+struct TagEntry {
+    name: String,
+    #[serde(default)]
+    size: u64,
+}
+
+pub fn list_models() -> Vec<LocalModel> {
+    let Some(body) = http_get("/api/tags", Duration::from_secs(2)) else {
+        return vec![];
+    };
+    let resp: TagsResp = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(_) => return vec![],
+    };
+    resp.models.into_iter()
+        .map(|m| LocalModel {
+            is_compatible: is_compatible(&m.name),
+            name: m.name,
+            size_bytes: m.size,
+        })
+        .collect()
 }
 
 // ─── Raw HTTP helpers (no HTTP crate on purpose) ──────────────────────
@@ -235,7 +284,7 @@ fn memchr_nl(hay: &[u8]) -> Option<usize> {
 
 // ─── Orchestrator ─────────────────────────────────────────────────────
 
-pub fn run_install(app: AppHandle) {
+pub fn run_install(app: AppHandle, model: String) {
     let steps = 4u8;
     let step = |name: &str, i: u8| SetupEvent::Step {
         step: name.into(), index: i, total: steps,
@@ -265,10 +314,10 @@ pub fn run_install(app: AppHandle) {
     }
 
     // Step 3: pull model
-    emit(&app, step("Pulling gemma3:4b", 3));
-    if model_present(MODEL) {
-        emit(&app, SetupEvent::Log { message: "Model already present.".into() });
-    } else if let Err(e) = pull_model(&app, MODEL) {
+    emit(&app, step(&format!("Pulling {model}"), 3));
+    if model_present(&model) {
+        emit(&app, SetupEvent::Log { message: format!("{model} already present.") });
+    } else if let Err(e) = pull_model(&app, &model) {
         emit(&app, SetupEvent::Failed { reason: e });
         return;
     }

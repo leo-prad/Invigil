@@ -495,11 +495,29 @@ fn get_session_intervals(
 fn get_ai_status(state: tauri::State<'_, AppState>) -> Result<ai_setup::AiStatus, String> {
     let setup_seen = state.db.get_setting("ai_setup_seen").unwrap_or_else(|_| "false".into()) == "true";
     let ai_enabled = state.db.get_setting("ai_enabled").unwrap_or_else(|_| "false".into()) == "true";
+    let active_model = state.db.get_setting("ai_model").unwrap_or_else(|_| ai_setup::DEFAULT_MODEL.into());
     let ollama_reachable = ai_setup::ollama_reachable();
     let model_present = if ollama_reachable {
-        ai_setup::model_present(ai_setup::MODEL)
+        ai_setup::model_present(&active_model)
     } else { false };
-    Ok(ai_setup::AiStatus { setup_seen, ai_enabled, ollama_reachable, model_present })
+    Ok(ai_setup::AiStatus {
+        setup_seen, ai_enabled, ollama_reachable, model_present, active_model,
+    })
+}
+
+#[tauri::command]
+fn list_local_models() -> Result<Vec<ai_setup::LocalModel>, String> {
+    Ok(ai_setup::list_models())
+}
+
+#[tauri::command]
+fn set_ai_model(
+    state: tauri::State<'_, AppState>,
+    model: String,
+) -> Result<(), String> {
+    state.db.set_setting("ai_model", &model).map_err(|e| e.to_string())?;
+    llm::set_active_model(&model);
+    Ok(())
 }
 
 #[tauri::command]
@@ -532,14 +550,17 @@ fn install_ai(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<(), S
     // Fire and forget — progress arrives via `ai-setup-progress` events.
     let db = state.db.clone();
     let app_bg = app.clone();
+    let model = state.db.get_setting("ai_model").unwrap_or_else(|_| ai_setup::DEFAULT_MODEL.into());
+    let model_for_check = model.clone();
     std::thread::spawn(move || {
-        ai_setup::run_install(app_bg.clone());
+        ai_setup::run_install(app_bg.clone(), model);
         // After success, flip the enabled flag automatically so the app
         // starts using AI immediately.
-        if ai_setup::ollama_reachable() && ai_setup::model_present(ai_setup::MODEL) {
+        if ai_setup::ollama_reachable() && ai_setup::model_present(&model_for_check) {
             let _ = db.set_setting("ai_enabled", "true");
             let _ = db.set_setting("tier1_enabled", "true");
             let _ = db.set_setting("ai_setup_seen", "true");
+            llm::set_active_model(&model_for_check);
         }
     });
     Ok(())
@@ -553,6 +574,11 @@ pub fn run() {
 
     let db = Database::new().expect("Failed to initialize database");
     let session_mgr = SessionManager::new(db.clone());
+
+    // Prime the active LLM model from settings (defaults to gemma3:4b if unset).
+    if let Ok(m) = db.get_setting("ai_model") {
+        llm::set_active_model(&m);
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -607,6 +633,8 @@ pub fn run() {
             mark_ai_setup_seen,
             set_ai_enabled,
             install_ai,
+            list_local_models,
+            set_ai_model,
         ])
         .setup(|app| {
             // Bring main window to front if found

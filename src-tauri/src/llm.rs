@@ -4,15 +4,27 @@
 //! If Ollama is unreachable the call returns `None`, and the
 //! caller should fall back to the Tier 0 default.
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::net::TcpStream;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 const OLLAMA_HOST: &str = "127.0.0.1:11434";
-const MODEL: &str = "gemma3:4b";
 const TIMEOUT: Duration = Duration::from_secs(4);
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn model_slot() -> &'static RwLock<String> {
+    static SLOT: OnceLock<RwLock<String>> = OnceLock::new();
+    SLOT.get_or_init(|| RwLock::new("gemma3:4b".to_string()))
+}
+
+pub fn active_model() -> String { model_slot().read().clone() }
+
+pub fn set_active_model(m: &str) {
+    if !m.is_empty() { *model_slot().write() = m.to_string(); }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LlmVerdict {
@@ -24,8 +36,9 @@ pub enum LlmVerdict {
 /// text. Returns None if Ollama isn't reachable, the request fails, or the response
 /// can't be parsed. Handles both chunked and non-chunked HTTP responses.
 fn ollama_generate(prompt: &str, num_predict: i32) -> Option<String> {
+    let model = active_model();
     let body = serde_json::json!({
-        "model": MODEL,
+        "model": model,
         "prompt": prompt,
         "stream": false,
         "options": { "temperature": 0.0, "num_predict": num_predict }
@@ -375,8 +388,9 @@ pub fn validate_goal(goal: &str, description: &str) -> String {
          random spam, or nonsense."
     );
 
+    let model = active_model();
     let body = serde_json::json!({
-        "model": MODEL,
+        "model": model,
         "prompt": prompt,
         "stream": false,
         "options": {

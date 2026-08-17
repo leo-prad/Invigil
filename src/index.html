@@ -51,7 +51,13 @@
       </nav>
 
       <!-- Mascot bottom-left with bubble underneath -->
-      <div class="mascot-slot">
+      <div class="mascot-slot" id="mascotSlot">
+        <div class="mascot-lock" id="mascotLock" style="display:none;" title="Local AI model needed">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="11" width="16" height="10" rx="2"/>
+            <path d="M8 11V7a4 4 0 018 0v4"/>
+          </svg>
+        </div>
         <div class="mascot-fig">
           <svg viewBox="0 0 100 110" xmlns="http://www.w3.org/2000/svg">
             <defs>
@@ -457,39 +463,51 @@
 </div>
 
 <!-- ================= AI ONBOARDING MODAL ================= -->
-<div class="modal-backdrop" id="aiOnboardBackdrop" style="display:none;">
+<div class="modal-backdrop ai-onboard-backdrop" id="aiOnboardBackdrop" style="display:none;">
   <div class="modal-card ai-onboard-card">
 
     <!-- Pitch state -->
     <div class="ai-onboard-state" data-ai-state="pitch">
-      <h2 class="ai-onboard-title">Want smarter distraction detection?</h2>
+      <h2 class="ai-onboard-title">Want <span class="hero-word">smarter</span> distraction detection?</h2>
       <p class="ai-onboard-lede">
-        Invigil can run a small AI model locally to judge borderline windows —
-        things like "is <em>this</em> YouTube tab a lecture or a rabbit hole?"
-        It never leaves your machine.
+        Allow Invigil to run a small <em class="pop">local</em> AI model to better optimize your
+        monitoring experience while you're on task. It judges what you're doing more accurately —
+        like, is <em>this</em> YouTube video an educational one or a distraction?
+        <em class="pop">Nothing</em> ever leaves your PC.
       </p>
+
+      <div class="ai-existing-card" id="aiExistingCard" style="display:none;">
+        <div class="ai-existing-badge">Found on your machine</div>
+        <div class="ai-existing-body">
+          <div class="ai-existing-name" id="aiExistingName">—</div>
+          <div class="ai-existing-note">
+            Already installed via Ollama. Skip the download and use this instead.
+          </div>
+        </div>
+        <button class="btn primary" id="aiUseExistingBtn">Use this model</button>
+      </div>
 
       <div class="ai-compare">
         <div class="ai-compare-col recommended">
           <span class="ai-compare-label">Opt in</span>
           <span class="ai-compare-head">Full AI assistance</span>
           <span class="ai-compare-body">
-            Judges ambiguous windows in context. Better goal validation.
-            Adapts to your specific study language.
+            Smarter monitoring, detection, and goal validation.
+            Also adapts to your work style and gives you personalized feedback.
           </span>
         </div>
         <div class="ai-compare-col">
           <span class="ai-compare-label">Opt out</span>
           <span class="ai-compare-head">Rules only</span>
           <span class="ai-compare-body">
-            Uses built-in allow/deny lists. Faster, no download —
-            but may flag things it shouldn't understand.
+            Generic detection with <em>no</em> personalization. Relies on built-in
+            rules and has a high chance of flagging things which are <em>really</em> work.
           </span>
         </div>
       </div>
 
       <div class="ai-size-note">
-        <span>Downloads Ollama + gemma3:4b</span>
+        <span>Downloads Ollama + Gemma3:4b (local AI model)</span>
         <strong>~3.3&nbsp;GB · one-time</strong>
       </div>
 

@@ -118,7 +118,27 @@
     padding-top: 18px;
     border-top: 1px solid rgba(255,255,255,0.08);
     display: flex; flex-direction: column; align-items: center; gap: 8px;
+    position: relative;
   }
+  .mascot-slot.locked .mascot-fig { filter: grayscale(0.85) brightness(0.6); animation-play-state: paused; }
+  .mascot-slot.locked .mascot-bubble { color: rgba(231,225,204,0.55); font-style: normal; }
+  .mascot-lock {
+    position: absolute;
+    top: 34px;
+    right: calc(50% - 60px);
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: rgba(20, 25, 20, 0.92);
+    border: 1.5px solid rgba(212, 162, 76, 0.6);
+    color: var(--gold);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    z-index: 2;
+  }
+  .mascot-lock svg { width: 15px; height: 15px; }
   .mascot-fig { width: 88px; height: 100px; animation: bob 5s ease-in-out infinite; filter: drop-shadow(0 6px 12px rgba(0,0,0,0.35)); }
   .mascot-fig svg { width: 100%; height: 100%; }
   @keyframes bob { 0%,100%{ transform: translateY(0) rotate(-2deg); } 50%{ transform: translateY(-4px) rotate(2deg); } }
@@ -1523,45 +1543,121 @@
   }
 
   /* ─── AI onboarding modal ──────────────────────────────────────── */
+  .ai-onboard-backdrop {
+    background: color-mix(in oklab, var(--forest) 78%, transparent) !important;
+    backdrop-filter: blur(6px) !important;
+    z-index: 200 !important;
+  }
+  body.ai-onboard-open { overflow: hidden; }
   .ai-onboard-card {
-    max-width: 520px;
-    padding: 28px 28px 22px;
+    width: 640px;
+    max-width: 92vw;
+    padding: 40px 44px 36px;
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 30px;
+    border-radius: 20px;
+    box-shadow: 0 30px 60px -20px rgba(20, 30, 15, 0.55),
+                0 8px 24px -8px rgba(20, 30, 15, 0.35);
+  }
+  .ai-onboard-state {
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+  }
+  .ai-onboard-title + .ai-onboard-lede { margin-top: 4px; }
+  .ai-onboard-lede em.pop {
+    font-style: italic;
+    font-weight: 600;
+    color: var(--terracotta);
+    font-family: Charter, "Iowan Old Style", Georgia, serif;
+    letter-spacing: 0.005em;
+  }
+  .ai-onboard-lede em {
+    font-style: italic;
+    color: var(--forest);
+  }
+  .ai-compare-body em {
+    font-style: italic;
+    font-weight: 600;
+    color: var(--terracotta);
+    font-family: Charter, Georgia, serif;
   }
   .ai-onboard-title {
     font-family: Charter, "Iowan Old Style", Georgia, serif;
     font-weight: 500;
-    font-size: 26px;
-    letter-spacing: -0.01em;
+    font-size: 34px;
+    line-height: 1.15;
+    letter-spacing: -0.015em;
     margin: 0;
     color: var(--ink);
     text-wrap: balance;
   }
+  .hero-word {
+    font-style: italic;
+    font-weight: 500;
+    color: var(--terracotta);
+    letter-spacing: -0.005em;
+    text-decoration: underline;
+    text-decoration-color: var(--terracotta);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 6px;
+  }
   .ai-onboard-lede {
     color: var(--ink-mid);
-    font-size: 14.5px;
-    line-height: 1.55;
+    font-size: 15.5px;
+    line-height: 1.6;
     margin: 0;
   }
   .ai-onboard-lede em { color: var(--terracotta); font-style: italic; }
 
+  .ai-existing-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 20px;
+    background: color-mix(in srgb, var(--gold) 12%, var(--paper));
+    border: 1px solid color-mix(in srgb, var(--gold) 40%, var(--line));
+    border-radius: 14px;
+    position: relative;
+  }
+  .ai-existing-badge {
+    position: absolute;
+    top: -10px; left: 18px;
+    background: var(--gold);
+    color: var(--ink);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 4px;
+  }
+  .ai-existing-body { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+  .ai-existing-name {
+    font-family: Charter, Georgia, serif;
+    font-size: 17px;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .ai-existing-note { font-size: 13px; color: var(--ink-mid); line-height: 1.45; }
+  .ai-existing-card .btn { padding: 10px 16px; font-size: 13.5px; white-space: nowrap; }
+
   .ai-compare {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    padding: 14px;
+    gap: 16px;
+    padding: 18px;
     background: var(--cream);
-    border-radius: 12px;
+    border-radius: 14px;
     border: 1px solid var(--line);
   }
   .ai-compare-col {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    padding: 12px;
-    border-radius: 8px;
+    gap: 7px;
+    padding: 16px 15px;
+    border-radius: 10px;
     background: var(--paper);
     border: 1px solid transparent;
     position: relative;
@@ -1593,23 +1689,23 @@
   }
   .ai-compare-head {
     font-family: Charter, Georgia, serif;
-    font-size: 15px;
+    font-size: 17px;
     color: var(--ink);
   }
   .ai-compare-body {
-    font-size: 12.5px;
+    font-size: 13.5px;
     color: var(--ink-mid);
-    line-height: 1.45;
+    line-height: 1.5;
   }
 
   .ai-size-note {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 11px 14px;
+    padding: 14px 18px;
     background: var(--cream);
-    border-radius: 8px;
-    font-size: 13px;
+    border-radius: 10px;
+    font-size: 14px;
     color: var(--ink-mid);
   }
   .ai-size-note strong {
@@ -1622,9 +1718,10 @@
   .ai-onboard-actions {
     display: flex;
     justify-content: flex-end;
-    gap: 10px;
-    margin-top: 4px;
+    gap: 12px;
+    margin-top: 6px;
   }
+  .ai-onboard-actions .btn { padding: 12px 20px; font-size: 14.5px; }
 
   .ai-progress-block {
     background: var(--cream);
