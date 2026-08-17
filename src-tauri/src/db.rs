@@ -273,6 +273,7 @@ impl Database {
             ("tier3_enabled", "false"),
             ("ai_setup_seen", "false"),
             ("ai_enabled", "false"),
+            ("ai_model", "gemma3:4b"),
         ];
         for (k, v) in defaults {
             conn.execute(
