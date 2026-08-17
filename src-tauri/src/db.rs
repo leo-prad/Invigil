@@ -271,6 +271,8 @@ impl Database {
             ("tier1_enabled", "true"),
             ("tier2_enabled", "false"),
             ("tier3_enabled", "false"),
+            ("ai_setup_seen", "false"),
+            ("ai_enabled", "false"),
         ];
         for (k, v) in defaults {
             conn.execute(
