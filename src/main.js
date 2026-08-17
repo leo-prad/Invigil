@@ -2642,6 +2642,7 @@ const aiOnboard = {
 
     document.getElementById('aiOptOutBtn')?.addEventListener('click', () => this.optOut());
     document.getElementById('aiOptInBtn')?.addEventListener('click', () => this.startInstall());
+    document.getElementById('aiUseExistingBtn')?.addEventListener('click', () => this.useExisting());
     document.getElementById('aiHideBtn')?.addEventListener('click', () => this.hide());
     document.getElementById('aiDoneBtn')?.addEventListener('click', () => {
       this.hide();
@@ -2677,14 +2678,42 @@ const aiOnboard = {
     }
   },
 
-  showPitch() {
+  async showPitch() {
     if (!this.backdrop) return;
     this.setState('pitch');
     this.backdrop.style.display = 'flex';
+    document.body.classList.add('ai-onboard-open');
+    // Probe local Ollama for reusable models.
+    this.existingModel = null;
+    try {
+      const models = await invoke('list_local_models');
+      const pick = (models || []).find(m => m.is_compatible);
+      const card = document.getElementById('aiExistingCard');
+      const nameEl = document.getElementById('aiExistingName');
+      if (pick && card && nameEl) {
+        this.existingModel = pick.name;
+        const gb = (pick.size_bytes / (1024**3)).toFixed(1);
+        nameEl.textContent = `${pick.name}  ·  ${gb} GB`;
+        card.style.display = '';
+      } else if (card) {
+        card.style.display = 'none';
+      }
+    } catch (e) { /* Ollama not running — no card */ }
+  },
+
+  async useExisting() {
+    if (!this.existingModel) return;
+    try {
+      await invoke('set_ai_model', { model: this.existingModel });
+      await invoke('mark_ai_setup_seen', { optedIn: true });
+    } catch (e) { console.warn('adopt existing model failed', e); }
+    this.setState('success');
+    this.refreshSettings();
   },
 
   hide() {
     if (this.backdrop) this.backdrop.style.display = 'none';
+    document.body.classList.remove('ai-onboard-open');
     if (this.progressUnlisten) { this.progressUnlisten(); this.progressUnlisten = null; }
   },
 
@@ -2766,9 +2795,29 @@ const aiOnboard = {
     if (this.progressUnlisten) { this.progressUnlisten(); this.progressUnlisten = null; }
   },
 
+  applyDashboardLock(active) {
+    const slot = document.getElementById('mascotSlot');
+    const lock = document.getElementById('mascotLock');
+    const bubble = document.querySelector('.mascot-bubble');
+    if (!slot || !lock) return;
+    if (active) {
+      slot.classList.remove('locked');
+      lock.style.display = 'none';
+    } else {
+      slot.classList.add('locked');
+      lock.style.display = 'flex';
+      if (bubble) {
+        bubble.innerHTML = 'Enable local AI to unlock Xeno\'s take.' +
+          '<span class="sig">— Settings → AI assistance</span>';
+      }
+    }
+  },
+
   async refreshSettings() {
     try { this.aiStatus = await invoke('get_ai_status'); }
     catch (e) { return; }
+    const aiActive = this.aiStatus.ai_enabled && this.aiStatus.ollama_reachable && this.aiStatus.model_present;
+    this.applyDashboardLock(aiActive);
     const headline = document.getElementById('aiStatusHeadline');
     const sub = document.getElementById('aiStatusSub');
     const switchEl = document.getElementById('aiEnabledSwitch');
