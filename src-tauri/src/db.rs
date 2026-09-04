@@ -444,6 +444,38 @@ impl Database {
         Ok(())
     }
 
+    /// Return up to `limit` distinct recent goals and descriptions, deduped
+    /// case-insensitively — the most recent capitalization wins. Used by the
+    /// start-session modal to autofill from prior tasks.
+    pub fn get_recent_task_suggestions(&self, limit: usize) -> SqlResult<(Vec<String>, Vec<String>)> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT goal, COALESCE(description, '') FROM sessions \
+             WHERE goal IS NOT NULL AND trim(goal) != '' \
+             ORDER BY started_at DESC LIMIT 200"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0).unwrap_or_default(), row.get::<_, String>(1).unwrap_or_default()))
+        })?;
+        let mut goals: Vec<String> = Vec::with_capacity(limit);
+        let mut descs: Vec<String> = Vec::with_capacity(limit);
+        let mut goal_seen = std::collections::HashSet::<String>::new();
+        let mut desc_seen = std::collections::HashSet::<String>::new();
+        for row in rows.filter_map(|r| r.ok()) {
+            let (goal, desc) = row;
+            let g_key = goal.trim().to_lowercase();
+            if !g_key.is_empty() && goal_seen.insert(g_key) && goals.len() < limit {
+                goals.push(goal.trim().to_string());
+            }
+            let d_key = desc.trim().to_lowercase();
+            if !d_key.is_empty() && desc_seen.insert(d_key) && descs.len() < limit {
+                descs.push(desc.trim().to_string());
+            }
+            if goals.len() >= limit && descs.len() >= limit { break; }
+        }
+        Ok((goals, descs))
+    }
+
     pub fn get_recent_sessions(&self, limit: i64) -> SqlResult<Vec<Session>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(

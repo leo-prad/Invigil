@@ -232,6 +232,18 @@ fn get_top_tools(state: tauri::State<'_, AppState>) -> Result<Vec<String>, Strin
     state.db.get_top_user_tools().map_err(|e| e.to_string())
 }
 
+#[derive(serde::Serialize)]
+struct RecentTasks {
+    goals: Vec<String>,
+    descriptions: Vec<String>,
+}
+
+#[tauri::command]
+fn get_recent_tasks(state: tauri::State<'_, AppState>) -> Result<RecentTasks, String> {
+    let (goals, descriptions) = state.db.get_recent_task_suggestions(3).map_err(|e| e.to_string())?;
+    Ok(RecentTasks { goals, descriptions })
+}
+
 // --- Profile commands ---
 
 #[tauri::command]
@@ -598,6 +610,7 @@ pub fn run() {
             allow_app_this_session,
             rename_session,
             get_top_tools,
+            get_recent_tasks,
             // Dashboard
             get_dashboard_data,
             get_day_stats,
@@ -642,6 +655,14 @@ pub fn run() {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
+
+            // Warm gemma3:4b on a background thread so the first `validate_goal`
+            // call after the user opens the start-session modal doesn't have to
+            // pay the 20-30s cold-load cost. Fire-and-forget: any error is fine,
+            // the fallback path in validate_goal handles Ollama-down gracefully.
+            std::thread::spawn(|| {
+                let _ = llm::warm_model();
+            });
 
             // Build system tray icon with click-to-restore
             let app_handle = app.handle().clone();
