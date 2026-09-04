@@ -72,6 +72,7 @@ async function init() {
   }
 
   buildCalendar();
+  setupElasticBounce();
 
   // Calendar month navigation
   const calNav = document.querySelector('.cal-nav');
@@ -439,6 +440,53 @@ function buildCalendar() {
     lastHoveredDate = null;
     clearHoverRange();
   });
+}
+
+// Fake iOS-style elastic bounce on the inner .content scroller. WebView2 on
+// Windows doesn't fire a native bounce for mouse-wheel input, so when the
+// user scrolls past either edge we translateY the .page element and let it
+// spring back. Sidebar never moves because .app is height:100vh and the
+// bounce lives entirely inside .content.
+function setupElasticBounce() {
+  const scroller = document.querySelector('.content');
+  const page = document.querySelector('.page');
+  if (!scroller || !page) return;
+  const MAX = 90;      // px of stretch per wheel burst
+  const DECAY = 0.55;  // diminishing returns as we get further from 0
+  const SPRING_MS = 380;
+  let offset = 0;
+  let springTimer = null;
+
+  const spring = () => {
+    page.style.transition = `transform ${SPRING_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+    page.style.transform = 'translate3d(0,0,0)';
+    springTimer = setTimeout(() => {
+      page.style.transition = '';
+      offset = 0;
+      springTimer = null;
+    }, SPRING_MS);
+  };
+
+  scroller.addEventListener('wheel', (e) => {
+    const top = scroller.scrollTop;
+    const max = scroller.scrollHeight - scroller.clientHeight;
+    const atTop = top <= 0 && e.deltaY < 0;
+    const atBottom = top >= max - 1 && e.deltaY > 0;
+    if (!atTop && !atBottom) {
+      if (offset !== 0 && !springTimer) spring();
+      return;
+    }
+    e.preventDefault();
+    if (springTimer) { clearTimeout(springTimer); springTimer = null; }
+    page.style.transition = '';
+    const dir = atTop ? 1 : -1;
+    const room = MAX - Math.abs(offset);
+    const delta = dir * Math.min(Math.abs(e.deltaY) * DECAY, room * 0.6);
+    offset = Math.max(-MAX, Math.min(MAX, offset + delta));
+    page.style.transform = `translate3d(0, ${offset}px, 0)`;
+    clearTimeout(scroller._bounceRelease);
+    scroller._bounceRelease = setTimeout(spring, 80);
+  }, { passive: false });
 }
 
 let anchorDate = null;
