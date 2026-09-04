@@ -49,6 +49,8 @@ pub struct Correction {
     pub original_status: String,
     pub corrected_status: String,
     pub timestamp: String,
+    // Free-text user reason from the "this is actually work" flow. None for silent overrides.
+    pub justification: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +93,25 @@ pub struct StreakInfo {
 pub struct DistractionStat {
     pub name: String,
     pub minutes: i64,
+    pub seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bounty {
+    pub id: String,
+    pub day: String,              // Local-date YYYY-MM-DD; the whole row is discarded past midnight.
+    pub kind: String,             // "reinforcing" | "exploratory"
+    pub difficulty: String,       // "easy" | "medium" | "hard"
+    pub title: String,
+    pub description: String,
+    pub criterion: String,        // JSON blob; shape lives in bounties::Criterion
+    pub reward: i64,
+    pub status: String,           // "available" | "accepted" | "completed" | "claimed"
+    pub progress: f64,            // 0.0 .. 1.0
+    pub progress_label: String,   // e.g. "12 / 25 min"
+    pub accepted_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub claimed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,12 +228,34 @@ impl Database {
                 date TEXT NOT NULL UNIQUE,
                 focused INTEGER NOT NULL DEFAULT 0
             );
+
+            CREATE TABLE IF NOT EXISTS bounties (
+                id TEXT PRIMARY KEY,
+                day TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                difficulty TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                criterion TEXT NOT NULL,
+                reward INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'available',
+                progress REAL NOT NULL DEFAULT 0.0,
+                progress_label TEXT NOT NULL DEFAULT '',
+                accepted_at TEXT,
+                completed_at TEXT,
+                claimed_at TEXT
+            );
         ")?;
         
         // Safely check and add description column to sessions table if missing
         let has_desc = conn.prepare("SELECT description FROM sessions LIMIT 1").is_ok();
         if !has_desc {
             let _ = conn.execute("ALTER TABLE sessions ADD COLUMN description TEXT NOT NULL DEFAULT ''", params![]);
+        }
+        // Nullable justification column for the "this is actually work" flow.
+        let has_just = conn.prepare("SELECT justification FROM corrections LIMIT 1").is_ok();
+        if !has_just {
+            let _ = conn.execute("ALTER TABLE corrections ADD COLUMN justification TEXT", params![]);
         }
         Ok(())
     }
@@ -223,11 +266,14 @@ impl Database {
         // Default settings
         let defaults = vec![
             ("idle_timeout_sec", "45"),
-            ("grace_period_sec", "15"),
+            ("grace_period_sec", "0"),
             ("sensitivity", "3"),
             ("tier1_enabled", "true"),
             ("tier2_enabled", "false"),
             ("tier3_enabled", "false"),
+            ("ai_setup_seen", "false"),
+            ("ai_enabled", "false"),
+            ("ai_model", "gemma3:4b"),
         ];
         for (k, v) in defaults {
             conn.execute(
@@ -496,9 +542,9 @@ impl Database {
     pub fn insert_correction(&self, correction: &Correction) -> SqlResult<()> {
         let conn = self.conn.lock();
         conn.execute(
-            "INSERT INTO corrections (id, interval_id, original_status, corrected_status, timestamp)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![correction.id, correction.interval_id, correction.original_status, correction.corrected_status, correction.timestamp],
+            "INSERT INTO corrections (id, interval_id, original_status, corrected_status, timestamp, justification)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![correction.id, correction.interval_id, correction.original_status, correction.corrected_status, correction.timestamp, correction.justification],
         )?;
         // Also update the interval itself
         conn.execute(
@@ -590,7 +636,7 @@ impl Database {
     pub fn get_all_settings(&self) -> SqlResult<Settings> {
         Ok(Settings {
             idle_timeout_sec: self.get_setting("idle_timeout_sec").unwrap_or("45".into()).parse().unwrap_or(45),
-            grace_period_sec: self.get_setting("grace_period_sec").unwrap_or("15".into()).parse().unwrap_or(15),
+            grace_period_sec: self.get_setting("grace_period_sec").unwrap_or("0".into()).parse().unwrap_or(0),
             sensitivity: self.get_setting("sensitivity").unwrap_or("3".into()).parse().unwrap_or(3),
             quiet_hours_start: self.get_setting("quiet_hours_start").ok(),
             quiet_hours_end: self.get_setting("quiet_hours_end").ok(),
@@ -614,10 +660,20 @@ impl Database {
     pub fn get_streak_info(&self) -> SqlResult<StreakInfo> {
         let conn = self.conn.lock();
 
-        // Current streak: count consecutive days back from today
+        // Current streak: count consecutive focused days ending at the most recent focused day.
+        // If today has no row yet (user hasn't started a session today), start from yesterday
+        // so the streak still counts what they built up. Only breaks when a whole day is skipped.
         let today = Utc::now().format("%Y-%m-%d").to_string();
         let mut current = 0i64;
         let mut check_date = chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d").unwrap_or_default();
+        let today_focused: i64 = conn.query_row(
+            "SELECT COALESCE(focused, 0) FROM streaks WHERE date=?1",
+            params![check_date.format("%Y-%m-%d").to_string()],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        if today_focused == 0 {
+            check_date -= chrono::Duration::days(1);
+        }
         loop {
             let ds = check_date.format("%Y-%m-%d").to_string();
             let focused: i64 = conn.query_row(
@@ -699,14 +755,16 @@ impl Database {
         let conn = self.conn.lock();
         let week_ago = (Utc::now() - chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
         let mut stmt = conn.prepare(
-            "SELECT category, COUNT(*) * 5 / 60 as mins FROM intervals
+            "SELECT category, COUNT(*) * 5 as secs FROM intervals
              WHERE status='off_task' AND start_ts >= ?1
-             GROUP BY category ORDER BY mins DESC LIMIT 10"
+             GROUP BY category ORDER BY secs DESC LIMIT 10"
         )?;
         let rows = stmt.query_map(params![week_ago], |row| {
+            let secs: i64 = row.get(1)?;
             Ok(DistractionStat {
                 name: row.get(0)?,
-                minutes: row.get(1)?,
+                minutes: secs / 60,
+                seconds: secs,
             })
         })?;
         rows.collect()
@@ -736,6 +794,160 @@ impl Database {
             }
         }
         Ok(tools)
+    }
+
+    // ─── Bounties ────────────────────────────────────────────────────
+
+    pub fn get_bounties_for_day(&self, day: &str) -> SqlResult<Vec<Bounty>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, day, kind, difficulty, title, description, criterion, reward,
+                    status, progress, progress_label, accepted_at, completed_at, claimed_at
+             FROM bounties WHERE day = ?1 ORDER BY id"
+        )?;
+        let rows = stmt.query_map(params![day], |row| {
+            Ok(Bounty {
+                id: row.get(0)?,
+                day: row.get(1)?,
+                kind: row.get(2)?,
+                difficulty: row.get(3)?,
+                title: row.get(4)?,
+                description: row.get(5)?,
+                criterion: row.get(6)?,
+                reward: row.get(7)?,
+                status: row.get(8)?,
+                progress: row.get(9)?,
+                progress_label: row.get(10)?,
+                accepted_at: row.get(11)?,
+                completed_at: row.get(12)?,
+                claimed_at: row.get(13)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn insert_bounty(&self, b: &Bounty) -> SqlResult<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO bounties (id, day, kind, difficulty, title, description, criterion, reward,
+                                    status, progress, progress_label, accepted_at, completed_at, claimed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                b.id, b.day, b.kind, b.difficulty, b.title, b.description, b.criterion, b.reward,
+                b.status, b.progress, b.progress_label, b.accepted_at, b.completed_at, b.claimed_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_bounty(&self, b: &Bounty) -> SqlResult<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE bounties SET status=?2, progress=?3, progress_label=?4,
+                                  accepted_at=?5, completed_at=?6, claimed_at=?7
+             WHERE id=?1",
+            params![
+                b.id, b.status, b.progress, b.progress_label,
+                b.accepted_at, b.completed_at, b.claimed_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_bounties_for_day(&self, day: &str) -> SqlResult<()> {
+        let conn = self.conn.lock();
+        conn.execute("DELETE FROM bounties WHERE day = ?1", params![day])?;
+        // Also drop any ledger rows tied to those bounties so a reset doesn't leave
+        // stranded points behind. Bounty ledger rows use session_id = "bounty:<uuid>".
+        conn.execute("DELETE FROM points_ledger WHERE session_id LIKE 'bounty:%'", params![])?;
+        Ok(())
+    }
+
+    pub fn get_bounty(&self, id: &str) -> SqlResult<Option<Bounty>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, day, kind, difficulty, title, description, criterion, reward,
+                    status, progress, progress_label, accepted_at, completed_at, claimed_at
+             FROM bounties WHERE id = ?1"
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(Bounty {
+                id: row.get(0)?,
+                day: row.get(1)?,
+                kind: row.get(2)?,
+                difficulty: row.get(3)?,
+                title: row.get(4)?,
+                description: row.get(5)?,
+                criterion: row.get(6)?,
+                reward: row.get(7)?,
+                status: row.get(8)?,
+                progress: row.get(9)?,
+                progress_label: row.get(10)?,
+                accepted_at: row.get(11)?,
+                completed_at: row.get(12)?,
+                claimed_at: row.get(13)?,
+            })
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// Categories the user has spent >=5 min on across intervals, sorted by frequency desc.
+    /// `since` is an ISO date string ("YYYY-MM-DD"); rows earlier than that are excluded.
+    pub fn get_used_categories_since(&self, since: &str) -> SqlResult<Vec<(String, i64)>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT category, COUNT(*) * 5 as secs FROM intervals
+             WHERE date(start_ts) >= ?1 AND category != '' AND category != 'Invigil' AND status = 'on_task'
+             GROUP BY category HAVING secs >= 300 ORDER BY secs DESC LIMIT 20"
+        )?;
+        let rows = stmt.query_map(params![since], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.collect()
+    }
+
+    pub fn get_best_deep_focus_min(&self) -> SqlResult<i64> {
+        // Longest single on-task run across all history, rounded down to minutes. Derived
+        // from consecutive on_task intervals; approximate but good enough for a bounty goal.
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT start_ts, end_ts, status, session_id FROM intervals ORDER BY session_id, start_ts"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        let mut best = 0i64;
+        let mut run_start: Option<chrono::DateTime<chrono::Utc>> = None;
+        let mut last_sid: Option<String> = None;
+        for r in rows.filter_map(|r| r.ok()) {
+            let (start_ts, end_ts, status, sid) = r;
+            if Some(&sid) != last_sid.as_ref() {
+                run_start = None;
+                last_sid = Some(sid.clone());
+            }
+            let st = chrono::DateTime::parse_from_rfc3339(&start_ts)
+                .ok().map(|d| d.with_timezone(&chrono::Utc));
+            if status == "on_task" {
+                if run_start.is_none() { run_start = st; }
+                if let (Some(rs), Some(end)) = (
+                    run_start,
+                    end_ts.as_deref()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|d| d.with_timezone(&chrono::Utc)),
+                ) {
+                    let secs = (end - rs).num_seconds().max(0);
+                    if secs / 60 > best { best = secs / 60; }
+                }
+            } else {
+                run_start = None;
+            }
+        }
+        Ok(best)
     }
 
     pub fn get_attention_trend(&self, days: i64) -> SqlResult<Vec<DayStats>> {
