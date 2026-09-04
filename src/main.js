@@ -443,28 +443,44 @@ function buildCalendar() {
 }
 
 // Fake iOS-style elastic bounce on the inner .content scroller. WebView2 on
-// Windows doesn't fire a native bounce for mouse-wheel input, so when the
-// user scrolls past either edge we translateY the .page element and let it
-// spring back. Sidebar never moves because .app is height:100vh and the
-// bounce lives entirely inside .content.
+// Windows doesn't emit a native mouse-wheel overscroll animation, so when
+// the wheel is at either edge we translateY the .page element with rubber-
+// band resistance and spring back on release. Sidebar never moves because
+// .app is height:100vh and the bounce lives entirely inside .content.
 function setupElasticBounce() {
   const scroller = document.querySelector('.content');
   const page = document.querySelector('.page');
   if (!scroller || !page) return;
-  const MAX = 90;      // px of stretch per wheel burst
-  const DECAY = 0.55;  // diminishing returns as we get further from 0
-  const SPRING_MS = 380;
-  let offset = 0;
-  let springTimer = null;
 
-  const spring = () => {
-    page.style.transition = `transform ${SPRING_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`;
-    page.style.transform = 'translate3d(0,0,0)';
-    springTimer = setTimeout(() => {
-      page.style.transition = '';
-      offset = 0;
-      springTimer = null;
-    }, SPRING_MS);
+  const MAX = 120;        // hard cap on stretch in px
+  const RESISTANCE = 0.35; // input * resistance = how much offset actually gains
+  const IDLE_SPRING_MS = 55; // how long after last wheel event before we spring
+  let target = 0;
+  let current = 0;
+  let rafId = null;
+  let releaseTimer = null;
+
+  const setTransform = (v) => {
+    page.style.transform = v === 0 ? '' : `translate3d(0, ${v.toFixed(2)}px, 0)`;
+  };
+
+  const tick = () => {
+    const diff = target - current;
+    if (Math.abs(diff) < 0.4 && target === 0) {
+      current = 0;
+      setTransform(0);
+      rafId = null;
+      return;
+    }
+    current += diff * 0.22;
+    setTransform(current);
+    rafId = requestAnimationFrame(tick);
+  };
+  const ensureAnim = () => { if (rafId == null) rafId = requestAnimationFrame(tick); };
+
+  const releaseSoon = () => {
+    clearTimeout(releaseTimer);
+    releaseTimer = setTimeout(() => { target = 0; ensureAnim(); }, IDLE_SPRING_MS);
   };
 
   scroller.addEventListener('wheel', (e) => {
@@ -472,20 +488,21 @@ function setupElasticBounce() {
     const max = scroller.scrollHeight - scroller.clientHeight;
     const atTop = top <= 0 && e.deltaY < 0;
     const atBottom = top >= max - 1 && e.deltaY > 0;
+    // If we're translated and the user is scrolling back into content,
+    // release the bounce immediately so the scroll feels connected.
     if (!atTop && !atBottom) {
-      if (offset !== 0 && !springTimer) spring();
+      if (target !== 0) { target = 0; ensureAnim(); }
       return;
     }
     e.preventDefault();
-    if (springTimer) { clearTimeout(springTimer); springTimer = null; }
-    page.style.transition = '';
     const dir = atTop ? 1 : -1;
-    const room = MAX - Math.abs(offset);
-    const delta = dir * Math.min(Math.abs(e.deltaY) * DECAY, room * 0.6);
-    offset = Math.max(-MAX, Math.min(MAX, offset + delta));
-    page.style.transform = `translate3d(0, ${offset}px, 0)`;
-    clearTimeout(scroller._bounceRelease);
-    scroller._bounceRelease = setTimeout(spring, 80);
+    // Rubber band: further from 0, each new unit of input gives less offset.
+    const dist = Math.abs(target);
+    const resist = RESISTANCE * (1 - dist / MAX);
+    const delta = dir * Math.abs(e.deltaY) * Math.max(resist, 0.04);
+    target = Math.max(-MAX, Math.min(MAX, target + delta));
+    ensureAnim();
+    releaseSoon();
   }, { passive: false });
 }
 
@@ -771,16 +788,65 @@ function renderTrend() {
 
 // ─── Sessions list ───────────────────────────────────────────────────
 
-window.editSessionName = async function(id, currentGoal) {
-  const newName = prompt('Rename session goal:', currentGoal);
-  if (!newName || !newName.trim() || newName.trim() === currentGoal) return;
-  try {
-    await invoke('rename_session', { id, goal: newName.trim() });
-    liveData = await invoke('get_dashboard_data');
-    renderSessions();
-  } catch (e) {
-    console.error('Failed to rename session:', e);
-  }
+window.editSessionName = async function(id, currentGoal, ev) {
+  const btn = ev?.currentTarget || ev?.target?.closest('.session-edit-btn');
+  const row = btn?.closest('.session-row');
+  const label = row?.querySelector('.goal-text');
+  if (!label) return;
+  if (label.isContentEditable) { label.focus(); return; }
+
+  const original = label.textContent;
+  label.contentEditable = 'true';
+  label.spellcheck = false;
+  label.classList.add('editing');
+  if (btn) btn.style.visibility = 'hidden';
+  label.focus();
+  // Select all text
+  const range = document.createRange();
+  range.selectNodeContents(label);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+
+  let committed = false;
+  const cleanup = () => {
+    label.contentEditable = 'false';
+    label.classList.remove('editing');
+    if (btn) btn.style.visibility = '';
+    label.removeEventListener('keydown', onKey);
+    label.removeEventListener('blur', onBlur);
+  };
+  const commit = async () => {
+    if (committed) return;
+    committed = true;
+    const next = label.textContent.trim();
+    cleanup();
+    if (!next || next === original) {
+      label.textContent = original;
+      return;
+    }
+    try {
+      await invoke('rename_session', { id, goal: next });
+      liveData = await invoke('get_dashboard_data');
+      renderSessions();
+    } catch (e) {
+      console.error('Failed to rename session:', e);
+      label.textContent = original;
+    }
+  };
+  const cancel = () => {
+    if (committed) return;
+    committed = true;
+    label.textContent = original;
+    cleanup();
+  };
+  const onKey = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); label.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+  };
+  const onBlur = () => commit();
+  label.addEventListener('keydown', onKey);
+  label.addEventListener('blur', onBlur);
 };
 
 function renderSessions() {
@@ -804,7 +870,7 @@ function renderSessions() {
       return `<div class="session-row">
         <div class="goal">
           <span class="goal-text">${s.goal}</span>
-          <button class="session-edit-btn" title="Rename session" onclick="editSessionName('${s.id}', '${safeGoal}')">
+          <button class="session-edit-btn" title="Rename session" onclick="editSessionName('${s.id}', '${safeGoal}', event)">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
           </button>
         </div>
@@ -829,7 +895,7 @@ function renderSessions() {
         return `<div class="session-row">
           <div class="goal">
             <span class="goal-text">${s.goal}</span>
-            <button class="session-edit-btn" title="Rename session" onclick="editSessionName('${s.id}', '${safeGoal}')">
+            <button class="session-edit-btn" title="Rename session" onclick="editSessionName('${s.id}', '${safeGoal}', event)">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
           </div>
