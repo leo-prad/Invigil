@@ -168,7 +168,7 @@ fn get_dashboard_data(
     let recent = db.get_recent_sessions(5).unwrap_or_default();
     let weekly_min = db.get_weekly_focus_minutes().unwrap_or(0);
     let distractions = db.get_week_distraction_stats().unwrap_or_default();
-    let trend = db.get_attention_trend(14).unwrap_or_default();
+    let trend = db.get_attention_trend(400).unwrap_or_default();
     let points = db.get_total_points().unwrap_or(0);
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let today_stats = db.get_day_stats(&today).unwrap_or(db::DayStats {

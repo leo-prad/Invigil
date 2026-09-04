@@ -665,8 +665,8 @@ function renderTrend() {
     return;
   }
 
-  // Slice the 14-day series to what the current mode wants.
-  let series = all;
+  // Slice the trend series to what the current mode wants.
+  let series = all.slice(-14);
   if (state.mode === 'single' && state.start) {
     // 7 days ending on the picked day (or all we have, whichever is shorter).
     const idx = all.findIndex(t => t.date === state.start);
