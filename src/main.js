@@ -900,17 +900,288 @@ function navigateTo(page) {
   document.querySelectorAll('.nav-item[data-page]').forEach(i => i.classList.remove('active'));
   const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
   if (navItem) navItem.classList.add('active');
-  ['dashboard','session','settings'].forEach(p => {
+  ['dashboard','session','bounties','settings'].forEach(p => {
     const el = document.getElementById('page-' + p);
+    if (!el) return;
     el.style.display = p === page ? '' : 'none';
     if (p === page) { el.classList.remove('page-enter'); void el.offsetWidth; el.classList.add('page-enter'); }
   });
   if (page === 'session') renderSessionTimeline();
+  if (page === 'bounties') { refreshBounties(); wireBountyDebugOnce(); }
+}
+
+let _bountyDebugWired = false;
+function wireBountyDebugOnce() {
+  if (_bountyDebugWired) return;
+  const btn = document.getElementById('bountyResetBtn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    try {
+      localStorage.removeItem('bountyCompletedSeen');
+      await invoke('debug_reset_bounties');
+      await refreshBounties();
+    } catch (e) { console.warn('debug_reset_bounties failed:', e); }
+  });
+  _bountyDebugWired = true;
 }
 
 document.querySelectorAll('.nav-item[data-page]').forEach(item => {
   item.addEventListener('click', () => navigateTo(item.dataset.page));
 });
+
+// ─── Bounties ────────────────────────────────────────────────────────
+
+let bountyCountdownInterval = null;
+let bountyRefreshTargetTs = null;
+
+async function refreshBounties() {
+  const grid = document.getElementById('bountyGrid');
+  if (!grid) return;
+  try {
+    const payload = await invoke('get_bounties');
+    // Backend gives us seconds-until-midnight; convert to a wall-clock target so the
+    // JS timer keeps counting down accurately without another IPC round-trip per second.
+    bountyRefreshTargetTs = Date.now() + payload.seconds_until_refresh * 1000;
+    startBountyCountdown();
+    renderBountyGrid(payload.bounties || []);
+  } catch (e) {
+    console.warn('get_bounties failed:', e);
+    grid.innerHTML = '<div class="bounty-empty">Could not load bounties. Try again shortly.</div>';
+  }
+}
+
+const DIFF_ORDER = { easy: 0, medium: 1, hard: 2 };
+
+function renderBountyGrid(bounties) {
+  const grid = document.getElementById('bountyGrid');
+  if (!grid) return;
+  if (!bounties.length) {
+    grid.innerHTML = '<div class="bounty-empty">No bounties yet — check back after midnight.</div>';
+    return;
+  }
+  // Confetti on the first visit after a bounty flips to completed/claimed.
+  const seenKey = 'bountyCompletedSeen';
+  const seen = new Set(JSON.parse(localStorage.getItem(seenKey) || '[]'));
+  const freshWin = bounties.some(b =>
+    (b.status === 'completed' || b.status === 'claimed') && !seen.has(b.id)
+  );
+  if (freshWin) {
+    bounties.forEach(b => {
+      if (b.status === 'completed' || b.status === 'claimed') seen.add(b.id);
+    });
+    localStorage.setItem(seenKey, JSON.stringify([...seen]));
+    setTimeout(burstConfetti, 120);
+  }
+  // Sort easy → medium → hard so the difficulty ramps left-to-right / top-to-bottom.
+  const sorted = [...bounties].sort((a, b) =>
+    (DIFF_ORDER[a.difficulty] ?? 9) - (DIFF_ORDER[b.difficulty] ?? 9)
+  );
+  // One-at-a-time rule: if any bounty on the board is currently accepted, other
+  // still-available bounties render as "locked" so the user can't stack acceptances.
+  const hasActive = sorted.some(b => b.status === 'accepted');
+  grid.innerHTML = sorted.map(b => cardHtml(b, hasActive)).join('');
+
+  grid.querySelectorAll('[data-action="accept"]').forEach(el => {
+    el.addEventListener('click', () => acceptBounty(el.dataset.id));
+  });
+  grid.querySelectorAll('[data-action="claim"]').forEach(el => {
+    el.addEventListener('click', () => claimBounty(el.dataset.id));
+  });
+  grid.querySelectorAll('[data-action="demo-complete"]').forEach(el => {
+    el.addEventListener('click', async () => {
+      try {
+        await invoke('debug_complete_bounty', { id: el.dataset.id });
+        await refreshBounties();
+      } catch (e) { console.warn('debug_complete_bounty failed:', e); }
+    });
+  });
+  grid.querySelectorAll('.bounty-card').forEach(attachTilt);
+}
+
+function cardHtml(b, hasActive) {
+  const diffLabel = b.difficulty.charAt(0).toUpperCase() + b.difficulty.slice(1);
+  const pct = Math.max(0, Math.min(100, (b.progress || 0) * 100));
+  const showProgress = b.status === 'accepted' || b.status === 'completed' || b.status === 'claimed';
+  let btn;
+  if (b.status === 'available') {
+    btn = hasActive
+      ? `<button class="bounty-btn locked" disabled title="Finish or claim your active bounty first">Locked</button>`
+      : `<button class="bounty-btn accept" data-action="accept" data-id="${b.id}">Accept bounty</button>`;
+  } else if (b.status === 'accepted') {
+    btn = `<button class="bounty-btn in-progress" disabled>In progress…</button>`;
+  } else if (b.status === 'completed') {
+    btn = `<button class="bounty-btn claim" data-action="claim" data-id="${b.id}">Claim +${b.reward}</button>`;
+  } else {
+    btn = `<button class="bounty-btn claimed" disabled>Claimed ✓</button>`;
+  }
+  return `
+    <div class="bounty-card ${b.status}">
+      <div class="b-info">
+        <div class="bounty-badges">
+          <span class="bounty-badge diff-${b.difficulty}">${diffLabel}</span>
+        </div>
+        <div class="bounty-title">${escapeHtml(b.title)}</div>
+        <div class="bounty-desc">${escapeHtml(b.description)}</div>
+      </div>
+      <div class="b-reward-slot">
+        <div class="bounty-reward">
+          <span class="num">+${b.reward}</span>
+          <span class="lbl">pts</span>
+        </div>
+      </div>
+      <div class="b-progress-slot">
+        ${showProgress ? `
+          <div class="bounty-progress" style="min-width:220px;">
+            <div class="bounty-progress-track"><div class="bounty-progress-fill" style="width:${pct}%"></div></div>
+            <div class="bounty-progress-label">${escapeHtml(b.progress_label || '')}</div>
+          </div>` : ''}
+      </div>
+      <div class="b-action-slot">
+        ${btn}
+        ${b.status === 'accepted' ? `<button class="bounty-card-demo" data-action="demo-complete" data-id="${b.id}" title="Skip the work — flip to Completed for demo">⚡ Force complete</button>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Subtle cursor-follow 3D tilt on hover. Max ±5deg on either axis, animated via
+ * transform. Kept intentionally soft so it reads as material response, not a
+ * gimmick — no exaggerated depth, no glare layer, no bouncy spring.
+ */
+function attachTilt(card) {
+  const MAX_DEG = 1.8;
+  let raf = 0;
+  const rest = () => {
+    if (raf) cancelAnimationFrame(raf);
+    card.style.transform = '';
+  };
+  const onMove = (e) => {
+    if (e.target.closest('button, a, .bounty-card-demo')) { rest(); return; }
+    const rect = card.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    const ry = (x - 0.5) * (MAX_DEG * 2);
+    const rx = -(y - 0.5) * (MAX_DEG * 2);
+    if (raf) cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      card.style.transform = `perspective(1400px) rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg) translateZ(0)`;
+    });
+  };
+  const onLeave = rest;
+  card.addEventListener('mousemove', onMove);
+  card.addEventListener('mouseleave', onLeave);
+}
+
+function burstConfetti() {
+  const layer = document.createElement('div');
+  layer.className = 'confetti-layer';
+  document.body.appendChild(layer);
+  const colors = ['#c47f4a', '#c9a34a', '#5a7a44', '#3a4d33', '#a8b89a', '#8b6bb0'];
+  const count = 90;
+  const vw = window.innerWidth;
+  for (let i = 0; i < count; i++) {
+    const p = document.createElement('div');
+    p.className = 'confetti-piece';
+    const startX = Math.random() * vw;
+    const dx = (Math.random() - 0.5) * 260;
+    const rot = (Math.random() * 720 + 360) * (Math.random() < 0.5 ? -1 : 1);
+    const dur = 2.4 + Math.random() * 1.6;
+    const delay = Math.random() * 0.35;
+    const w = 6 + Math.random() * 8;
+    const h = 10 + Math.random() * 8;
+    p.style.left = startX + 'px';
+    p.style.width = w + 'px';
+    p.style.height = h + 'px';
+    p.style.background = colors[i % colors.length];
+    p.style.setProperty('--dx', dx + 'px');
+    p.style.setProperty('--rot', rot + 'deg');
+    p.style.animationDuration = dur + 's';
+    p.style.animationDelay = delay + 's';
+    layer.appendChild(p);
+  }
+  setTimeout(() => layer.remove(), 4500);
+}
+
+/**
+ * Prompt the user before actually accepting. Since only one bounty at a time is
+ * allowed, this is a soft-lock — makes the commitment explicit before the other
+ * cards lock themselves out.
+ */
+function acceptBounty(id) {
+  const grid = document.getElementById('bountyGrid');
+  const card = grid?.querySelector(`.bounty-card [data-id="${id}"]`)?.closest('.bounty-card');
+  const title = card?.querySelector('.bounty-title')?.textContent?.trim() || '';
+  const backdrop = document.getElementById('bountyConfirmBackdrop');
+  const targetEl = document.getElementById('bountyConfirmTarget');
+  const yesBtn = document.getElementById('bountyConfirmYes');
+  const noBtn = document.getElementById('bountyConfirmNo');
+  if (!backdrop || !yesBtn || !noBtn) return;
+  if (targetEl) targetEl.textContent = title;
+  backdrop.style.display = 'flex';
+
+  const cleanup = () => {
+    backdrop.style.display = 'none';
+    yesBtn.removeEventListener('click', onYes);
+    noBtn.removeEventListener('click', onNo);
+    backdrop.removeEventListener('click', onBackdrop);
+    document.removeEventListener('keydown', onKey);
+  };
+  const onYes = async () => {
+    cleanup();
+    try {
+      await invoke('accept_bounty', { id });
+      await refreshBounties();
+    } catch (e) {
+      console.warn('accept_bounty failed:', e);
+    }
+  };
+  const onNo = () => cleanup();
+  const onBackdrop = (e) => { if (e.target === backdrop) cleanup(); };
+  const onKey = (e) => { if (e.key === 'Escape') cleanup(); };
+  yesBtn.addEventListener('click', onYes);
+  noBtn.addEventListener('click', onNo);
+  backdrop.addEventListener('click', onBackdrop);
+  document.addEventListener('keydown', onKey);
+}
+
+async function claimBounty(id) {
+  try {
+    const reward = await invoke('claim_bounty', { id });
+    // Refresh dashboard totals silently so the points count elsewhere is current.
+    try { liveData = await invoke('get_dashboard_data'); } catch(e) {}
+    await refreshBounties();
+    console.log(`Bounty claimed: +${reward} pts`);
+  } catch (e) {
+    console.warn('claim_bounty failed:', e);
+  }
+}
+
+function startBountyCountdown() {
+  if (bountyCountdownInterval) return;
+  const tick = () => {
+    const el = document.getElementById('bountyCountdown');
+    if (!el || bountyRefreshTargetTs == null) return;
+    let secs = Math.max(0, Math.round((bountyRefreshTargetTs - Date.now()) / 1000));
+    if (secs === 0) {
+      // Midnight hit — pull the fresh pool. Backend will regenerate today's row.
+      refreshBounties();
+      return;
+    }
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    el.textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  };
+  tick();
+  bountyCountdownInterval = setInterval(tick, 1000);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[c]);
+}
 
 // ─── Session timeline ────────────────────────────────────────────────
 
@@ -1023,18 +1294,76 @@ startSessionBtn.addEventListener('click', async () => {
         startModalToolField.updateSuggestions(topTools);
       }
     } catch(e) {}
+    try { await populateRecentTaskPills(); } catch(e) {}
     startModal.style.display = 'flex';
   }
 });
 
+// Render up to 3 recent goals and 3 recent descriptions as clickable pills above
+// the corresponding inputs. Backend already dedups case-insensitively so the
+// last-typed capitalization wins ("Math" swallows "math").
+async function populateRecentTaskPills() {
+  const data = await invoke('get_recent_tasks').catch(() => null);
+  const goalPills = document.getElementById('recentGoalPills');
+  const descPills = document.getElementById('recentDescPills');
+  const goalInput = document.getElementById('startGoalInput');
+  const descInput = document.getElementById('startDescriptionInput');
+  const descCharCounter = document.getElementById('descCharCount');
+  const descInputBox = document.getElementById('descInputBox');
+
+  const paintRow = (host, items, onPick) => {
+    if (!host) return;
+    host.innerHTML = '';
+    if (!items || items.length === 0) { host.hidden = true; return; }
+    host.hidden = false;
+    host.insertAdjacentHTML('afterbegin', '<span class="recent-pills-lead">Recent:</span>');
+    for (const item of items.slice(0, 3)) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'recent-pill';
+      btn.title = item;
+      // Truncate on-screen but preserve full value on click via title.
+      btn.textContent = item.length > 42 ? item.slice(0, 40) + '…' : item;
+      btn.addEventListener('click', () => onPick(item));
+      host.appendChild(btn);
+    }
+  };
+
+  paintRow(goalPills, data?.goals, (v) => {
+    if (goalInput) { goalInput.value = v; goalInput.focus(); }
+  });
+  paintRow(descPills, data?.descriptions, (v) => {
+    if (!descInput) return;
+    descInput.value = v;
+    descInput.focus();
+    // Re-run the char-counter logic so the "25 minimum" hint updates.
+    if (descCharCounter) {
+      const len = v.trim().length;
+      descCharCounter.textContent = len >= 25
+        ? `${len} characters — minimum met`
+        : `${len} characters — 25 minimum`;
+      descCharCounter.classList.toggle('valid', len >= 25);
+      descCharCounter.classList.toggle('invalid', len < 25);
+    }
+    if (descInputBox && v.trim().length >= 25) descInputBox.classList.remove('error');
+  });
+}
+
 startModal.addEventListener('click', (e) => {
   if (e.target === startModal) startModal.style.display = 'none';
 });
-summaryModal.addEventListener('click', (e) => {
+summaryModal.addEventListener('click', async (e) => {
   if (e.target === summaryModal) {
     summaryModal.style.display = 'none';
     setSessionUI(false);
     resetSummaryAnimation();
+    // Same refresh path as summaryDoneBtn so backdrop-close doesn't leave the
+    // dashboard on stale numbers.
+    try { liveData = await invoke('get_dashboard_data'); } catch(e) {}
+    navigateTo('dashboard');
+    setMode({ mode: 'overall', start: null, end: null });
+    updateGreeting();
+    renderInsights();
   }
 });
 document.getElementById('summaryDoneBtn').addEventListener('click', async () => {
@@ -1043,19 +1372,29 @@ document.getElementById('summaryDoneBtn').addEventListener('click', async () => 
   resetSummaryAnimation();
   // Refresh dashboard data with await so trends and tiles render latest data
   try { liveData = await invoke('get_dashboard_data'); } catch(e) {}
+  // Bounty progress recomputes server-side on end_session, but if the user's already on
+  // the bounties page (they aren't here, but for future navigation) it's cheap to prime.
+  try { await invoke('get_bounties'); } catch(e) {}
   navigateTo('dashboard');
   setMode({ mode: 'overall', start: null, end: null });
   updateGreeting();
   renderInsights();
 });
 
-document.addEventListener('keydown', (e) => {
+document.addEventListener('keydown', async (e) => {
   if (e.key !== 'Escape') return;
   if (startModal.style.display !== 'none') startModal.style.display = 'none';
   if (summaryModal.style.display !== 'none') {
     summaryModal.style.display = 'none';
     setSessionUI(false);
     resetSummaryAnimation();
+    // Escape-close was skipping the dashboard refresh, so the greeting/tiles stayed
+    // stuck on their pre-session state. Match the summaryDoneBtn behavior.
+    try { liveData = await invoke('get_dashboard_data'); } catch(e) {}
+    navigateTo('dashboard');
+    setMode({ mode: 'overall', start: null, end: null });
+    updateGreeting();
+    renderInsights();
   }
 });
 
@@ -1108,9 +1447,18 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
   modalStartBtn.disabled = true;
   modalStartBtn.innerHTML = `<span>Validating with AI…</span>`;
 
+  // If the local model is loading cold (first run after Ollama start), that can
+  // take 20-30s. After 4s of silence, tell the user why so it doesn't feel stuck.
+  const warmingHint = setTimeout(() => {
+    if (modalStartBtn.disabled) {
+      modalStartBtn.innerHTML = `<span>Warming up local model (first run only)…</span>`;
+    }
+  }, 4000);
+
   // Validate task goal and description using Gemma AI
   try {
     const reason = await invoke('validate_goal', { goal, description });
+    clearTimeout(warmingHint);
     if (reason) {
       if (descInputBox) {
         descInputBox.classList.remove('error');
@@ -1128,6 +1476,7 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
       return;
     }
   } catch (e) {
+    clearTimeout(warmingHint);
     console.warn('Goal validation check failed:', e);
   }
   // Clear any previous denial reason
@@ -1186,7 +1535,11 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
     // Start local timer for smooth UI updates between ticks
     startLocalTimer(durationMin);
   } catch (e) {
+    // Make the failure visible instead of silently leaving the modal disabled.
     console.error('Failed to start session:', e);
+    sessionActive = false;
+    setSessionUI(false);
+    alert(`Couldn’t start the session: ${e?.toString() || 'unknown error'}`);
   }
 });
 
@@ -1395,7 +1748,7 @@ async function submitWorkClaim(reason) {
       cyberJustifySubmit.textContent = "Confirm — it's work";
     }
     if (cyberJustifyInput) cyberJustifyInput.disabled = false;
-    showJustifyError(outcome.message || 'That didn\'t land. Try again — or click "Just a break" and take it.');
+    showJustifyError(outcome.message || 'That didn\'t land. Try again — or click "Get back to work".');
     if (cyberJustifyInput) setTimeout(() => cyberJustifyInput.focus(), 0);
     return;
   }
@@ -1571,6 +1924,10 @@ function setSessionOffState() {
   });
   const viz = document.getElementById('sessionTimelineViz');
   viz.innerHTML = ''; viz.removeAttribute('data-rendered');
+  const goalEl = document.querySelector('.session-goal');
+  if (goalEl) goalEl.innerHTML = 'Ready when you are, <em>Leo.</em>';
+  const metaEl = document.querySelector('.session-goal-meta');
+  if (metaEl) metaEl.innerHTML = '<span>No session running · hit “Start session” below to begin</span>';
 }
 
 function safeRoulette(el, textVal, defaultVal) {
@@ -1758,39 +2115,43 @@ function renderSessionActivity() {
 
 // ─── Activity lists ──────────────────────────────────────────────────
 
+// Multi-color vendor logos come from @iconify-json/logos (baked into src/app-icons.js
+// at build time). Each entry there provides {body, w, h, aliases}. Here we build a
+// flat alias→entry map once, then look up by category/proc-name substring.
+const _APP_ICON_MAP = (() => {
+  const src = (typeof window !== 'undefined' && window.__APP_ICONS__) || {};
+  const map = new Map();
+  for (const key of Object.keys(src)) {
+    const entry = src[key];
+    for (const alias of entry.aliases) map.set(alias.toLowerCase(), entry);
+  }
+  return map;
+})();
+
+function _iconSvg(entry) {
+  return `<svg viewBox="0 0 ${entry.w} ${entry.h}" width="22" height="22" aria-hidden="true" preserveAspectRatio="xMidYMid meet">${entry.body}</svg>`;
+}
+
 function getAppIconHtml(category, procName) {
   const cat = (category || procName || '').toLowerCase();
+
+  // Invigil — the leaf mark used in the sidebar brand (index.html:18-21)
   if (cat.includes('invigil')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none"><rect x="2" y="2" width="20" height="20" rx="5" fill="#5A7C4E"/><path d="M8 7v10M12 7v10M16 7v10" stroke="#F4EEDC" stroke-width="2" stroke-linecap="round"/></svg>`, hasIcon: true };
+    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">
+      <rect x="0" y="0" width="24" height="24" rx="6" fill="#F0E7D0"/>
+      <path d="M4 20c0-8 6-14 16-14-1 9-6 15-16 15z" fill="#5A7A47"/>
+      <path d="M4 20c4-3 8-6 11-9" stroke="#F0E7D0" stroke-width="1.4" stroke-linecap="round"/>
+    </svg>`, hasIcon: true };
   }
-  if (cat.includes('chrome')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="10" fill="#4285F4"/><circle cx="12" cy="12" r="4" fill="#FFF"/><circle cx="12" cy="12" r="3" fill="#4285F4"/><path d="M12 2a10 10 0 0 1 8.66 5H12" fill="#EA4335"/><path d="M20.66 7A10 10 0 0 1 12 22v-10" fill="#FBBC05"/><path d="M12 22a10 10 0 0 1-8.66-15H12" fill="#34A853"/></svg>`, hasIcon: true };
+
+  // Real multi-color vendor logos from the baked lookup — try each alias substring
+  // against the category string, longest first so "vs code" beats "code".
+  const sortedAliases = Array.from(_APP_ICON_MAP.keys()).sort((a, b) => b.length - a.length);
+  for (const alias of sortedAliases) {
+    if (cat.includes(alias)) return { html: _iconSvg(_APP_ICON_MAP.get(alias)), hasIcon: true };
   }
-  if (cat.includes('antigravity')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none"><path d="M12 2L2 22h20L12 2z" fill="url(#agGrad)"/><defs><linearGradient id="agGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#FF4D5E"/><stop offset="50%" stop-color="#3FE8D8"/><stop offset="100%" stop-color="#7A9BB0"/></linearGradient></defs></svg>`, hasIcon: true };
-  }
-  if (cat.includes('discord')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="#5865F2"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028z"/></svg>`, hasIcon: true };
-  }
-  if (cat.includes('youtube')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`, hasIcon: true };
-  }
-  // Match specifically on "vs code", "vscode", or the process file "code.exe" — the old
-  // `cat.includes('code')` grabbed anything with the letters c-o-d-e (Claude Code windows,
-  // "codepen", etc.) and, worse, the SVG under it was actually a checkmark path, not the
-  // VS Code chevron. Real one below.
-  if (/(?:^|\W)(?:vscode|vs code|code\.exe|code - insiders)/.test(cat)) {
-    return { html: `<svg viewBox="0 0 100 100" width="22" height="22"><path d="M70.9 99.3L92.4 89c1.6-.8 2.6-2.4 2.6-4.2V15.2c0-1.8-1-3.4-2.6-4.2L70.9.7c-2.1-1-4.6-.6-6.3.9L23.8 38.4 6.1 25c-1.7-1.3-4-1.2-5.5.2-1.6 1.4-1.6 3.9 0 5.3l15.4 19.5L.6 69.5c-1.6 1.4-1.6 3.9 0 5.3 1.5 1.4 3.8 1.5 5.5.2l17.7-13.4 40.8 36.8c1.7 1.5 4.2 1.9 6.3.9zM75 27.2l-31 22.8 31 22.8V27.2z" fill="#007ACC"/></svg>`, hasIcon: true };
-  }
-  if (/(?:^|\W)(?:explorer\.exe|file explorer|windows explorer)|(?:^explorer$)/.test(cat)) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" fill="#FFC842"/><path d="M3 8h18v3H3z" fill="#E6A11C"/></svg>`, hasIcon: true };
-  }
-  if (cat.includes('firefox')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="10" fill="#FF7139"/><path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm4 8c0 2.2-1.8 4-4 4s-4-1.8-4-4c0-.6.1-1.1.3-1.6.4 1 1.4 1.6 2.5 1.6.9 0 1.7-.4 2.2-1.1.5.7 1.3 1.1 2.2 1.1 1.1 0 2.1-.6 2.5-1.6.2.5.3 1 .3 1.6z" fill="#FFB84D"/></svg>`, hasIcon: true };
-  }
-  if (cat.includes('edge')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="10" fill="#0078D7"/><path d="M12 4a8 8 0 0 1 8 8c0 2-1 4-3 5-1 .5-2 .5-3 0-1.5-1-2-3-1-4.5.5-1 2-1.5 3-1H8c-2 0-3 1-3 3s1.5 4 4 4c2 0 3-1 4-2h5c-1 3-4 5-7 5-4 0-8-3-8-8s3-9 8-9z" fill="#33B4E5"/></svg>`, hasIcon: true };
-  }
+
+
   // Fallback: soft initials tile — deliberately unopinionated so it's clearly a placeholder
   // and not a wrong-looking real logo.
   const init = (category || procName || '??').replace(/\.exe$/i, '').slice(0, 2).toUpperCase();
@@ -2348,6 +2709,237 @@ function updateAdvPanel(s) {
   if (memEl) memEl.textContent = `${mem.toFixed(0)} MB`;
 }
 
+// ─── AI onboarding ──────────────────────────────────────────────────
+
+const aiOnboard = {
+  backdrop: null,
+  states: {},
+  progressUnlisten: null,
+  aiStatus: null,
+
+  init() {
+    this.backdrop = document.getElementById('aiOnboardBackdrop');
+    if (!this.backdrop) return;
+    this.states = {
+      pitch: this.backdrop.querySelector('[data-ai-state="pitch"]'),
+      progress: this.backdrop.querySelector('[data-ai-state="progress"]'),
+      success: this.backdrop.querySelector('[data-ai-state="success"]'),
+      error: this.backdrop.querySelector('[data-ai-state="error"]'),
+    };
+
+    document.getElementById('aiOptOutBtn')?.addEventListener('click', () => this.optOut());
+    document.getElementById('aiOptInBtn')?.addEventListener('click', () => this.startInstall());
+    document.getElementById('aiUseExistingBtn')?.addEventListener('click', () => this.useExisting());
+    document.getElementById('aiHideBtn')?.addEventListener('click', () => this.hide());
+    document.getElementById('aiDoneBtn')?.addEventListener('click', () => {
+      this.hide();
+      this.refreshSettings();
+    });
+    document.getElementById('aiLaterBtn')?.addEventListener('click', () => this.hide());
+    document.getElementById('aiRetryBtn')?.addEventListener('click', () => this.startInstall());
+
+    document.getElementById('aiInstallBtn')?.addEventListener('click', () => this.showPitch());
+    document.getElementById('aiEnabledToggle')?.addEventListener('change', async (e) => {
+      try { await invoke('set_ai_enabled', { enabled: e.target.checked }); }
+      catch (err) { console.warn('set_ai_enabled failed', err); }
+      this.refreshSettings();
+    });
+  },
+
+  async checkFirstRun() {
+    try {
+      this.aiStatus = await invoke('get_ai_status');
+    } catch (e) {
+      console.warn('get_ai_status failed:', e);
+      return;
+    }
+    this.refreshSettings();
+    if (!this.aiStatus.setup_seen) {
+      this.showPitch();
+    }
+  },
+
+  setState(name) {
+    for (const [k, el] of Object.entries(this.states)) {
+      if (el) el.style.display = (k === name) ? '' : 'none';
+    }
+  },
+
+  async showPitch() {
+    if (!this.backdrop) return;
+    this.setState('pitch');
+    this.backdrop.style.display = 'flex';
+    document.body.classList.add('ai-onboard-open');
+    // Probe local Ollama for reusable models.
+    this.existingModel = null;
+    try {
+      const models = await invoke('list_local_models');
+      const pick = (models || []).find(m => m.is_compatible);
+      const card = document.getElementById('aiExistingCard');
+      const nameEl = document.getElementById('aiExistingName');
+      if (pick && card && nameEl) {
+        this.existingModel = pick.name;
+        const gb = (pick.size_bytes / (1024**3)).toFixed(1);
+        nameEl.textContent = `${pick.name}  ·  ${gb} GB`;
+        card.style.display = '';
+      } else if (card) {
+        card.style.display = 'none';
+      }
+    } catch (e) { /* Ollama not running — no card */ }
+  },
+
+  async useExisting() {
+    if (!this.existingModel) return;
+    try {
+      await invoke('set_ai_model', { model: this.existingModel });
+      await invoke('mark_ai_setup_seen', { optedIn: true });
+    } catch (e) { console.warn('adopt existing model failed', e); }
+    this.setState('success');
+    this.refreshSettings();
+  },
+
+  hide() {
+    if (this.backdrop) this.backdrop.style.display = 'none';
+    document.body.classList.remove('ai-onboard-open');
+    if (this.progressUnlisten) { this.progressUnlisten(); this.progressUnlisten = null; }
+  },
+
+  async optOut() {
+    try { await invoke('mark_ai_setup_seen', { optedIn: false }); }
+    catch (e) { console.warn('mark_ai_setup_seen failed', e); }
+    this.hide();
+    this.refreshSettings();
+  },
+
+  async startInstall() {
+    this.setState('progress');
+    this.resetProgressUi();
+    // Mark as seen up-front so if the user closes the app mid-install we don't re-prompt.
+    try { await invoke('mark_ai_setup_seen', { optedIn: true }); } catch (e) {}
+
+    if (this.progressUnlisten) this.progressUnlisten();
+    this.progressUnlisten = await listen('ai-setup-progress', (evt) => this.onProgress(evt.payload));
+
+    try {
+      await invoke('install_ai');
+    } catch (e) {
+      this.showError(String(e));
+    }
+  },
+
+  resetProgressUi() {
+    this.backdrop.querySelectorAll('.ai-step').forEach(el => {
+      el.classList.remove('done', 'active');
+      const s = el.querySelector('.ai-step-state');
+      if (s) s.textContent = 'Waiting';
+    });
+    const fill = document.getElementById('aiProgressFill');
+    if (fill) fill.style.width = '0%';
+    const status = document.getElementById('aiProgressStatus');
+    if (status) status.textContent = 'Starting…';
+  },
+
+  onProgress(payload) {
+    if (!payload || !payload.kind) return;
+    const status = document.getElementById('aiProgressStatus');
+    const fill = document.getElementById('aiProgressFill');
+
+    if (payload.kind === 'step') {
+      const idx = payload.index;
+      this.backdrop.querySelectorAll('.ai-step').forEach(el => {
+        const i = parseInt(el.dataset.stepIndex, 10);
+        el.classList.remove('active', 'done');
+        if (i < idx) { el.classList.add('done'); el.querySelector('.ai-step-state').textContent = 'Done'; }
+        else if (i === idx) { el.classList.add('active'); el.querySelector('.ai-step-state').textContent = 'In progress…'; }
+      });
+      if (status) status.textContent = payload.step;
+    } else if (payload.kind === 'progress') {
+      if (fill) fill.style.width = `${payload.percent.toFixed(1)}%`;
+      const mb = (payload.transferred / 1048576).toFixed(1);
+      const totalMb = (payload.total / 1048576).toFixed(1);
+      if (status) status.textContent = `${mb} / ${totalMb} MB · ${payload.percent.toFixed(1)}%${payload.note ? ' · ' + payload.note : ''}`;
+      const activeStep = this.backdrop.querySelector('.ai-step.active .ai-step-state');
+      if (activeStep) activeStep.textContent = `${payload.percent.toFixed(1)}%`;
+    } else if (payload.kind === 'log') {
+      if (status) status.textContent = payload.message;
+    } else if (payload.kind === 'done') {
+      if (fill) fill.style.width = '100%';
+      this.backdrop.querySelectorAll('.ai-step').forEach(el => {
+        el.classList.remove('active'); el.classList.add('done');
+        el.querySelector('.ai-step-state').textContent = 'Done';
+      });
+      this.setState('success');
+      if (this.progressUnlisten) { this.progressUnlisten(); this.progressUnlisten = null; }
+    } else if (payload.kind === 'failed') {
+      this.showError(payload.reason || 'Unknown error');
+    }
+  },
+
+  showError(reason) {
+    const el = document.getElementById('aiErrorReason');
+    if (el) el.textContent = reason;
+    this.setState('error');
+    if (this.progressUnlisten) { this.progressUnlisten(); this.progressUnlisten = null; }
+  },
+
+  applyDashboardLock(active) {
+    const slot = document.getElementById('mascotSlot');
+    const lock = document.getElementById('mascotLock');
+    const bubble = document.querySelector('.mascot-bubble');
+    if (!slot || !lock) return;
+    if (active) {
+      slot.classList.remove('locked');
+      lock.style.display = 'none';
+    } else {
+      slot.classList.add('locked');
+      lock.style.display = 'flex';
+      if (bubble) {
+        bubble.innerHTML = 'Enable local AI to unlock Xeno\'s take.' +
+          '<span class="sig">— Settings → AI assistance</span>';
+      }
+    }
+  },
+
+  async refreshSettings() {
+    try { this.aiStatus = await invoke('get_ai_status'); }
+    catch (e) { return; }
+    const aiActive = this.aiStatus.ai_enabled && this.aiStatus.ollama_reachable && this.aiStatus.model_present;
+    this.applyDashboardLock(aiActive);
+    const headline = document.getElementById('aiStatusHeadline');
+    const sub = document.getElementById('aiStatusSub');
+    const switchEl = document.getElementById('aiEnabledSwitch');
+    const toggle = document.getElementById('aiEnabledToggle');
+    const installBtn = document.getElementById('aiInstallBtn');
+    if (!headline || !sub || !switchEl || !toggle || !installBtn) return;
+
+    const s = this.aiStatus;
+    if (s.ollama_reachable && s.model_present) {
+      headline.textContent = 'AI assist is ' + (s.ai_enabled ? 'on' : 'off');
+      sub.textContent = 'gemma3:4b · installed locally · nothing leaves your machine';
+      switchEl.style.display = '';
+      toggle.checked = s.ai_enabled;
+      installBtn.style.display = 'none';
+    } else if (s.ollama_reachable && !s.model_present) {
+      headline.textContent = 'Ollama installed — model missing';
+      sub.textContent = 'gemma3:4b is not pulled yet. Install to enable AI features.';
+      switchEl.style.display = 'none';
+      installBtn.style.display = '';
+      installBtn.textContent = 'Pull gemma3:4b (~3.3 GB)';
+    } else {
+      headline.textContent = 'AI assist is off';
+      sub.textContent = 'Not installed. Invigil is using built-in rules only.';
+      switchEl.style.display = 'none';
+      installBtn.style.display = '';
+      installBtn.textContent = 'Install AI (~3.3 GB)';
+    }
+  },
+};
+
 // ─── Init on load ────────────────────────────────────────────────────
 
-init();
+init().then(() => {
+  // Only run onboarding for the main window, never the overlays.
+  if (window.location.hash === '#overlay-leaf' || window.location.hash === '#overlay-drift') return;
+  aiOnboard.init();
+  aiOnboard.checkFirstRun();
+});

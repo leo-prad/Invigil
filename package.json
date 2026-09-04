@@ -10,5 +10,8 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4"
+  },
+  "dependencies": {
+    "@iconify-json/logos": "^1.2.13"
   }
 }
