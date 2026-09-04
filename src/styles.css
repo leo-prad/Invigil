@@ -47,6 +47,14 @@
   input, textarea, [contenteditable="true"] { user-select: text; -webkit-user-select: text; cursor: text; }
   button, .nav-item, .btn, .chip, .cyber-btn, [role="button"] { cursor: pointer; }
   html, body { margin: 0; padding: 0; height: 100%; }
+  /* Kill the WebView's elastic-overscroll bounce. Without this, dragging past
+     the top/bottom edge of the dashboard slides the entire app chrome
+     (sidebar included) and leaves a bare cream stripe where the title bar
+     used to be. `contain` on the scroll container isolates it further. */
+  html, body {
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: auto;
+  }
   body {
     margin: 0;
     padding: 0;
