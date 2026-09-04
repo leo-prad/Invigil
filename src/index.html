@@ -25,17 +25,17 @@
           <div class="brand-sub">Focus daemon</div>
         </div>
       </div>
-      <nav>
-        <div class="nav-item active" data-page="dashboard">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 20V9m6 11V4m6 16v-7m6 7v-11"/></svg>
+      <nav aria-label="Primary">
+        <button type="button" class="nav-item active" data-page="dashboard" aria-current="page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 20V9m6 11V4m6 16v-7m6 7v-11"/></svg>
           Dashboard
-        </div>
-        <div class="nav-item" data-page="session">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        </button>
+        <button type="button" class="nav-item" data-page="session">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
           Session
-        </div>
-        <div class="nav-item" data-page="bounties">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        </button>
+        <button type="button" class="nav-item" data-page="bounties">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M8 4H6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"/>
             <rect x="8" y="2" width="8" height="4" rx="1"/>
             <path d="M8 12h6"/>
@@ -43,11 +43,11 @@
             <path d="M17.4 12.6l2 2-4.2 4.2H13v-2.2z"/>
           </svg>
           Bounties
-        </div>
-        <div class="nav-item" data-page="settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.6V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.6-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.6-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3 1.7 1.7 0 001-1.6V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.6 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9 1.7 1.7 0 001.6 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.6 1z"/></svg>
+        </button>
+        <button type="button" class="nav-item" data-page="settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.6V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.6-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.6-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3 1.7 1.7 0 001-1.6V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.6 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9 1.7 1.7 0 001.6 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.6 1z"/></svg>
           Settings
-        </div>
+        </button>
       </nav>
 
       <!-- Mascot bottom-left with bubble underneath -->
@@ -94,7 +94,7 @@
           </svg>
         </div>
         <div class="mascot-bubble">
-          Twelve days. Don't break the chain.
+          Ready when you are.
           <span class="sig">— Professor Xeno</span>
         </div>
       </div>
@@ -111,12 +111,12 @@
 
       <div class="top">
         <div>
-          <h1 class="greeting">Good afternoon, Leo — <em>you're on a roll.</em></h1>
-          <div class="greeting-sub">Twelve days locked in. Saturday, Aug 8 · no session running.</div>
+          <h1 class="greeting">Welcome back.</h1>
+          <div class="greeting-sub">Loading your dashboard…</div>
         </div>
-        <button class="overall-btn active" id="overallBtnGlobal">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
-          Overall
+        <button type="button" class="overall-btn active" id="overallBtnGlobal" aria-pressed="true" title="Show stats across all time">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+          All time
         </button>
       </div>
 
@@ -141,8 +141,8 @@
           <div class="cal-head">
             <div class="cal-title-row">August 2026</div>
             <div class="cal-nav">
-              <button aria-label="Prev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg></button>
-              <button aria-label="Next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></button>
+              <button type="button" aria-label="Previous month"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+              <button type="button" aria-label="Next month"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
             </div>
           </div>
 
@@ -178,9 +178,9 @@
                   <li role="option" data-value="points">Points/day</li>
                 </ul>
               </div>
-              <button class="overall-btn" id="overallBtnTrend">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
-                Overall
+              <button type="button" class="overall-btn" id="overallBtnTrend" aria-pressed="false" title="Reset chart to full range">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+                Reset range
               </button>
             </div>
           </div>
@@ -261,12 +261,10 @@
 
         <div class="session-goal-block">
           <h1 class="session-goal">
-            Finish <em>Chapter&nbsp;4 practice set</em> — problems 12 through 28, work shown in Overleaf.
+            Ready when you are, <em>Leo.</em>
           </h1>
           <div class="session-goal-meta">
-            <span>Started 2:14 PM</span>
-            <span class="sep">·</span>
-            <span>90-minute timer</span>
+            <span>No session running · hit “Start session” below to begin</span>
           </div>
         </div>
 
@@ -294,9 +292,9 @@
         </div>
 
         <div class="session-now" id="sessionNowBar" style="display:none;">
-          <span class="glyph" aria-hidden="true">Ov</span>
-          <span class="path">Overleaf <span class="muted">— ch04_practice.tex · line 128</span></span>
-          <span class="verdict">on task</span>
+          <span class="glyph" aria-hidden="true">—</span>
+          <span class="path">Waiting for activity…</span>
+          <span class="verdict">idle</span>
         </div>
 
         <div class="session-timeline">
@@ -304,8 +302,8 @@
             <span class="h">Focus this session</span>
           </div>
           <div class="session-timeline-viz" id="sessionTimelineViz"></div>
-          <div class="session-timeline-labels">
-            <span>2:14</span><span>2:24</span><span>2:34</span><span>2:44</span><span>now</span>
+          <div class="session-timeline-labels" id="sessionTimelineLabels">
+            <span>—</span><span>—</span><span>—</span><span>—</span><span>now</span>
           </div>
         </div>
 
@@ -597,23 +595,25 @@
     </div>
 
     <div class="modal-field">
-      <label>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.5" fill="currentColor" stroke-width="2"/></svg>
+      <label for="startGoalInput">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.5" fill="currentColor" stroke-width="2"/></svg>
         What's your task today?
       </label>
-      <input type="text" placeholder="I will study math.">
+      <input type="text" id="startGoalInput" placeholder="I will study math.">
+      <div class="recent-pills" id="recentGoalPills" hidden></div>
     </div>
 
     <div class="modal-field">
       <label for="startDescriptionInput">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
-        Detailed Description (min 25 characters)
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
+        Detailed description <span class="label-hint">(minimum 25 characters)</span>
       </label>
       <div class="desc-input-box" id="descInputBox">
         <textarea id="startDescriptionInput" rows="3" placeholder="Describe what you will work on in detail (e.g., 'Going to study integral calculus concepts and watch tutorial videos on integration techniques')..."></textarea>
-        <div class="desc-char-counter" id="descCharCount">0 / 25 min chars</div>
+        <div class="desc-char-counter" id="descCharCount">0 characters — 25 minimum</div>
         <div class="desc-denial-reason" id="descDenialReason" style="display:none;"></div>
       </div>
+      <div class="recent-pills" id="recentDescPills" hidden></div>
     </div>
 
     <div class="modal-field">
@@ -652,7 +652,7 @@
       </div>
       <div class="modal-headings">
         <h2>Session complete</h2>
-        <div class="summary-goal">Calc HW — Chapter 4 practice set</div>
+        <div class="summary-goal"></div>
       </div>
     </div>
 
@@ -673,9 +673,9 @@
 
     <div class="summary-points s-hide" id="summaryPointsBox">
       <div class="summary-breakdown" id="summaryBreakdown">
-        <span class="s-fade">36 min &times; 50</span><span class="v s-fade" id="sbVal0">0</span>
-        <span class="s-fade">3 distractions &times; &minus;100</span><span class="v down s-fade" id="sbVal1">0</span>
-        <span class="s-fade">streak bonus</span><span class="v up s-fade">&times;1.5</span>
+        <span class="s-fade">focus time &times; 50/min</span><span class="v s-fade" id="sbVal0">0</span>
+        <span class="s-fade">distractions &times; &minus;100</span><span class="v down s-fade" id="sbVal1">0</span>
+        <span class="s-fade">streak bonus</span><span class="v up s-fade">&times;1</span>
       </div>
       <div class="summary-total-row" id="summaryTotalRow" style="opacity:0;transform:scale(0);">
         <span class="k">Total</span>
@@ -683,10 +683,7 @@
       </div>
     </div>
 
-    <div class="summary-note s-hide" id="summaryNote">
-      Twelve days running now. Rough patch around minute twenty — otherwise a clean lock-in.
-      <span class="sig">— Professor Xeno</span>
-    </div>
+    <div class="summary-note s-hide" id="summaryNote"></div>
 
     <button class="btn primary modal-start s-hide" id="summaryDoneBtn">Back to dashboard</button>
   </div>
@@ -761,6 +758,7 @@
   </div>
 </div>
 
+  <script src='app-icons.js'></script>
   <script src='main.js'></script>
 </body>
 </html>

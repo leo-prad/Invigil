@@ -1294,18 +1294,76 @@ startSessionBtn.addEventListener('click', async () => {
         startModalToolField.updateSuggestions(topTools);
       }
     } catch(e) {}
+    try { await populateRecentTaskPills(); } catch(e) {}
     startModal.style.display = 'flex';
   }
 });
 
+// Render up to 3 recent goals and 3 recent descriptions as clickable pills above
+// the corresponding inputs. Backend already dedups case-insensitively so the
+// last-typed capitalization wins ("Math" swallows "math").
+async function populateRecentTaskPills() {
+  const data = await invoke('get_recent_tasks').catch(() => null);
+  const goalPills = document.getElementById('recentGoalPills');
+  const descPills = document.getElementById('recentDescPills');
+  const goalInput = document.getElementById('startGoalInput');
+  const descInput = document.getElementById('startDescriptionInput');
+  const descCharCounter = document.getElementById('descCharCount');
+  const descInputBox = document.getElementById('descInputBox');
+
+  const paintRow = (host, items, onPick) => {
+    if (!host) return;
+    host.innerHTML = '';
+    if (!items || items.length === 0) { host.hidden = true; return; }
+    host.hidden = false;
+    host.insertAdjacentHTML('afterbegin', '<span class="recent-pills-lead">Recent:</span>');
+    for (const item of items.slice(0, 3)) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'recent-pill';
+      btn.title = item;
+      // Truncate on-screen but preserve full value on click via title.
+      btn.textContent = item.length > 42 ? item.slice(0, 40) + '…' : item;
+      btn.addEventListener('click', () => onPick(item));
+      host.appendChild(btn);
+    }
+  };
+
+  paintRow(goalPills, data?.goals, (v) => {
+    if (goalInput) { goalInput.value = v; goalInput.focus(); }
+  });
+  paintRow(descPills, data?.descriptions, (v) => {
+    if (!descInput) return;
+    descInput.value = v;
+    descInput.focus();
+    // Re-run the char-counter logic so the "25 minimum" hint updates.
+    if (descCharCounter) {
+      const len = v.trim().length;
+      descCharCounter.textContent = len >= 25
+        ? `${len} characters — minimum met`
+        : `${len} characters — 25 minimum`;
+      descCharCounter.classList.toggle('valid', len >= 25);
+      descCharCounter.classList.toggle('invalid', len < 25);
+    }
+    if (descInputBox && v.trim().length >= 25) descInputBox.classList.remove('error');
+  });
+}
+
 startModal.addEventListener('click', (e) => {
   if (e.target === startModal) startModal.style.display = 'none';
 });
-summaryModal.addEventListener('click', (e) => {
+summaryModal.addEventListener('click', async (e) => {
   if (e.target === summaryModal) {
     summaryModal.style.display = 'none';
     setSessionUI(false);
     resetSummaryAnimation();
+    // Same refresh path as summaryDoneBtn so backdrop-close doesn't leave the
+    // dashboard on stale numbers.
+    try { liveData = await invoke('get_dashboard_data'); } catch(e) {}
+    navigateTo('dashboard');
+    setMode({ mode: 'overall', start: null, end: null });
+    updateGreeting();
+    renderInsights();
   }
 });
 document.getElementById('summaryDoneBtn').addEventListener('click', async () => {
@@ -1323,13 +1381,20 @@ document.getElementById('summaryDoneBtn').addEventListener('click', async () => 
   renderInsights();
 });
 
-document.addEventListener('keydown', (e) => {
+document.addEventListener('keydown', async (e) => {
   if (e.key !== 'Escape') return;
   if (startModal.style.display !== 'none') startModal.style.display = 'none';
   if (summaryModal.style.display !== 'none') {
     summaryModal.style.display = 'none';
     setSessionUI(false);
     resetSummaryAnimation();
+    // Escape-close was skipping the dashboard refresh, so the greeting/tiles stayed
+    // stuck on their pre-session state. Match the summaryDoneBtn behavior.
+    try { liveData = await invoke('get_dashboard_data'); } catch(e) {}
+    navigateTo('dashboard');
+    setMode({ mode: 'overall', start: null, end: null });
+    updateGreeting();
+    renderInsights();
   }
 });
 
@@ -1382,9 +1447,18 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
   modalStartBtn.disabled = true;
   modalStartBtn.innerHTML = `<span>Validating with AI…</span>`;
 
+  // If the local model is loading cold (first run after Ollama start), that can
+  // take 20-30s. After 4s of silence, tell the user why so it doesn't feel stuck.
+  const warmingHint = setTimeout(() => {
+    if (modalStartBtn.disabled) {
+      modalStartBtn.innerHTML = `<span>Warming up local model (first run only)…</span>`;
+    }
+  }, 4000);
+
   // Validate task goal and description using Gemma AI
   try {
     const reason = await invoke('validate_goal', { goal, description });
+    clearTimeout(warmingHint);
     if (reason) {
       if (descInputBox) {
         descInputBox.classList.remove('error');
@@ -1402,6 +1476,7 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
       return;
     }
   } catch (e) {
+    clearTimeout(warmingHint);
     console.warn('Goal validation check failed:', e);
   }
   // Clear any previous denial reason
@@ -1460,7 +1535,11 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
     // Start local timer for smooth UI updates between ticks
     startLocalTimer(durationMin);
   } catch (e) {
+    // Make the failure visible instead of silently leaving the modal disabled.
     console.error('Failed to start session:', e);
+    sessionActive = false;
+    setSessionUI(false);
+    alert(`Couldn’t start the session: ${e?.toString() || 'unknown error'}`);
   }
 });
 
@@ -1845,6 +1924,10 @@ function setSessionOffState() {
   });
   const viz = document.getElementById('sessionTimelineViz');
   viz.innerHTML = ''; viz.removeAttribute('data-rendered');
+  const goalEl = document.querySelector('.session-goal');
+  if (goalEl) goalEl.innerHTML = 'Ready when you are, <em>Leo.</em>';
+  const metaEl = document.querySelector('.session-goal-meta');
+  if (metaEl) metaEl.innerHTML = '<span>No session running · hit “Start session” below to begin</span>';
 }
 
 function safeRoulette(el, textVal, defaultVal) {
@@ -2032,39 +2115,43 @@ function renderSessionActivity() {
 
 // ─── Activity lists ──────────────────────────────────────────────────
 
+// Multi-color vendor logos come from @iconify-json/logos (baked into src/app-icons.js
+// at build time). Each entry there provides {body, w, h, aliases}. Here we build a
+// flat alias→entry map once, then look up by category/proc-name substring.
+const _APP_ICON_MAP = (() => {
+  const src = (typeof window !== 'undefined' && window.__APP_ICONS__) || {};
+  const map = new Map();
+  for (const key of Object.keys(src)) {
+    const entry = src[key];
+    for (const alias of entry.aliases) map.set(alias.toLowerCase(), entry);
+  }
+  return map;
+})();
+
+function _iconSvg(entry) {
+  return `<svg viewBox="0 0 ${entry.w} ${entry.h}" width="22" height="22" aria-hidden="true" preserveAspectRatio="xMidYMid meet">${entry.body}</svg>`;
+}
+
 function getAppIconHtml(category, procName) {
   const cat = (category || procName || '').toLowerCase();
+
+  // Invigil — the leaf mark used in the sidebar brand (index.html:18-21)
   if (cat.includes('invigil')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none"><rect x="2" y="2" width="20" height="20" rx="5" fill="#5A7C4E"/><path d="M8 7v10M12 7v10M16 7v10" stroke="#F4EEDC" stroke-width="2" stroke-linecap="round"/></svg>`, hasIcon: true };
+    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">
+      <rect x="0" y="0" width="24" height="24" rx="6" fill="#F0E7D0"/>
+      <path d="M4 20c0-8 6-14 16-14-1 9-6 15-16 15z" fill="#5A7A47"/>
+      <path d="M4 20c4-3 8-6 11-9" stroke="#F0E7D0" stroke-width="1.4" stroke-linecap="round"/>
+    </svg>`, hasIcon: true };
   }
-  if (cat.includes('chrome')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="10" fill="#4285F4"/><circle cx="12" cy="12" r="4" fill="#FFF"/><circle cx="12" cy="12" r="3" fill="#4285F4"/><path d="M12 2a10 10 0 0 1 8.66 5H12" fill="#EA4335"/><path d="M20.66 7A10 10 0 0 1 12 22v-10" fill="#FBBC05"/><path d="M12 22a10 10 0 0 1-8.66-15H12" fill="#34A853"/></svg>`, hasIcon: true };
+
+  // Real multi-color vendor logos from the baked lookup — try each alias substring
+  // against the category string, longest first so "vs code" beats "code".
+  const sortedAliases = Array.from(_APP_ICON_MAP.keys()).sort((a, b) => b.length - a.length);
+  for (const alias of sortedAliases) {
+    if (cat.includes(alias)) return { html: _iconSvg(_APP_ICON_MAP.get(alias)), hasIcon: true };
   }
-  if (cat.includes('antigravity')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none"><path d="M12 2L2 22h20L12 2z" fill="url(#agGrad)"/><defs><linearGradient id="agGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#FF4D5E"/><stop offset="50%" stop-color="#3FE8D8"/><stop offset="100%" stop-color="#7A9BB0"/></linearGradient></defs></svg>`, hasIcon: true };
-  }
-  if (cat.includes('discord')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="#5865F2"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028z"/></svg>`, hasIcon: true };
-  }
-  if (cat.includes('youtube')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`, hasIcon: true };
-  }
-  // Match specifically on "vs code", "vscode", or the process file "code.exe" — the old
-  // `cat.includes('code')` grabbed anything with the letters c-o-d-e (Claude Code windows,
-  // "codepen", etc.) and, worse, the SVG under it was actually a checkmark path, not the
-  // VS Code chevron. Real one below.
-  if (/(?:^|\W)(?:vscode|vs code|code\.exe|code - insiders)/.test(cat)) {
-    return { html: `<svg viewBox="0 0 100 100" width="22" height="22"><path d="M70.9 99.3L92.4 89c1.6-.8 2.6-2.4 2.6-4.2V15.2c0-1.8-1-3.4-2.6-4.2L70.9.7c-2.1-1-4.6-.6-6.3.9L23.8 38.4 6.1 25c-1.7-1.3-4-1.2-5.5.2-1.6 1.4-1.6 3.9 0 5.3l15.4 19.5L.6 69.5c-1.6 1.4-1.6 3.9 0 5.3 1.5 1.4 3.8 1.5 5.5.2l17.7-13.4 40.8 36.8c1.7 1.5 4.2 1.9 6.3.9zM75 27.2l-31 22.8 31 22.8V27.2z" fill="#007ACC"/></svg>`, hasIcon: true };
-  }
-  if (/(?:^|\W)(?:explorer\.exe|file explorer|windows explorer)|(?:^explorer$)/.test(cat)) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" fill="#FFC842"/><path d="M3 8h18v3H3z" fill="#E6A11C"/></svg>`, hasIcon: true };
-  }
-  if (cat.includes('firefox')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="10" fill="#FF7139"/><path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm4 8c0 2.2-1.8 4-4 4s-4-1.8-4-4c0-.6.1-1.1.3-1.6.4 1 1.4 1.6 2.5 1.6.9 0 1.7-.4 2.2-1.1.5.7 1.3 1.1 2.2 1.1 1.1 0 2.1-.6 2.5-1.6.2.5.3 1 .3 1.6z" fill="#FFB84D"/></svg>`, hasIcon: true };
-  }
-  if (cat.includes('edge')) {
-    return { html: `<svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="10" fill="#0078D7"/><path d="M12 4a8 8 0 0 1 8 8c0 2-1 4-3 5-1 .5-2 .5-3 0-1.5-1-2-3-1-4.5.5-1 2-1.5 3-1H8c-2 0-3 1-3 3s1.5 4 4 4c2 0 3-1 4-2h5c-1 3-4 5-7 5-4 0-8-3-8-8s3-9 8-9z" fill="#33B4E5"/></svg>`, hasIcon: true };
-  }
+
+
   // Fallback: soft initials tile — deliberately unopinionated so it's clearly a placeholder
   // and not a wrong-looking real logo.
   const init = (category || procName || '??').replace(/\.exe$/i, '').slice(0, 2).toUpperCase();

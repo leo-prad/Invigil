@@ -6,7 +6,7 @@
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -204,6 +204,35 @@ pub fn is_ollama_available() -> bool {
         },
         Duration::from_millis(500),
     ).is_ok()
+}
+
+/// Fire-and-forget preload of the active model. Called from `setup()` on a
+/// background thread so the first user-facing inference (validate_goal) doesn't
+/// have to pay the 20-30s cold-load cost. Any error is silently ignored —
+/// downstream callers already have graceful fallbacks for Ollama being down.
+pub fn warm_model() -> Option<()> {
+    if !is_ollama_available() { return None; }
+    let model = active_model();
+    let body = serde_json::json!({
+        "model": model,
+        "prompt": "hi",
+        "stream": false,
+        "options": { "temperature": 0.0, "num_predict": 1 }
+    });
+    let body_bytes = serde_json::to_vec(&body).ok()?;
+    let addr: std::net::SocketAddr = OLLAMA_HOST.parse().ok()?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).ok()?;
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(60))); // cold load can be long
+    let request = format!(
+        "POST /api/generate HTTP/1.1\r\nHost: {OLLAMA_HOST}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body_bytes.len()
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+    stream.write_all(&body_bytes).ok()?;
+    let mut buf = Vec::with_capacity(1024);
+    stream.read_to_end(&mut buf).ok()?;
+    Some(())
 }
 
 /// Where the Ollama installer drops `ollama.exe` on Windows. Checked in order — first hit wins.
@@ -408,7 +437,10 @@ pub fn validate_goal(goal: &str, description: &str) -> String {
         Ok(s) => s,
         Err(_) => return String::new(),
     };
-    let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
+    // Goal validation is user-facing and only runs once per session. Give the
+    // cold-start of gemma3:4b enough headroom (model can take 20-30s to load
+    // the first time it's asked to infer after `ollama serve` starts).
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(45)));
     let _ = stream.set_write_timeout(Some(TIMEOUT));
 
     let request = format!(
@@ -541,18 +573,27 @@ fn is_repeating_pattern(s: &str) -> bool {
 
 fn build_prompt(goal: &str, description: &str, app_name: &str, window_title: &str) -> String {
     format!(
-        "You are a strict focus-tracking assistant.\n\
+        "You are a strict focus-tracking assistant. Your default assumption is OFF_TASK — \
+         only flip to ON_TASK when the current window's SUBJECT MATTER clearly matches the \
+         committed task's SUBJECT MATTER, not just its general activity type.\n\n\
          Student's Task: \"{goal}\"\n\
          Task Description: \"{description}\"\n\n\
          Current Active Window:\n\
          App: {app_name}\n\
          Title: {window_title}\n\n\
-         Based on the student's task description, is the current window relevant, productive, and on-task for this session?\n\
-         Guidelines:\n\
-         - If watching educational videos or lectures (e.g. YouTube calculus/coding tutorials) relevant to their task description, reply on_task.\n\
-         - If watching unrelated entertainment, gaming videos, music videos, or social media, reply off_task.\n\
-         - If using search tools, reference sites, or development apps related to their description, reply on_task.\n\n\
-         Reply with ONLY 'on_task' or 'off_task'."
+         DECIDE:\n\
+         - Off_task if the window's content/title doesn't name anything from the task \
+           (e.g. task = \"AP Bio Ch 12 — meiosis\", window = code editor with a React \
+           project → off_task; subject mismatch).\n\
+         - Off_task if the app is a development / IDE / code editor and the task is not \
+           about programming or software (task = \"math\", \"chemistry\", \"essay\", \
+           \"reading\" → off_task).\n\
+         - Off_task if watching a video, music, social media, chat, or news that the title \
+           doesn't clearly tie to the task.\n\
+         - On_task ONLY when the title/content names the actual subject, tool, file, \
+           chapter, teacher, or artifact from the task description.\n\
+         - When uncertain, choose off_task. Do NOT give benefit of the doubt.\n\n\
+         Reply with EXACTLY one word: on_task or off_task."
     )
 }
 

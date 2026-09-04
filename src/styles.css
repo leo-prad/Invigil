@@ -104,6 +104,8 @@
     display: flex; align-items: center; gap: 12px; padding: 10px 14px;
     border-radius: 12px; color: rgba(231,225,204,0.75);
     cursor: pointer; font-size: 13.5px;
+    background: transparent; border: 0; width: 100%;
+    font-family: inherit; text-align: left;
   }
   .nav-item svg { width: 17px; height: 17px; flex-shrink: 0; opacity: 0.85; }
   .nav-item:hover:not(.active) { background: rgba(0,0,0,0.16); color: #F2ECD6; }
@@ -111,6 +113,77 @@
     background: var(--paper); color: var(--forest); font-weight: 550;
     box-shadow: 0 4px 12px rgba(0,0,0,0.18), var(--shadow-inner);
   }
+
+  /* ── Shared focus ring ────────────────────────────────────────────────
+     One consistent, visible focus indicator for every custom control. */
+  .btn:focus-visible,
+  .overall-btn:focus-visible,
+  .time-pill:focus-visible,
+  .cal-nav button:focus-visible,
+  .adv-toggle:focus-visible,
+  .cyber-btn:focus-visible,
+  .chip:focus-visible,
+  .tag-pill .remove:focus-visible,
+  .session-edit-btn:focus-visible,
+  .bounty-btn:focus-visible,
+  .ai-onboard-actions .btn:focus-visible,
+  .stat-picker:focus-visible {
+    outline: 2px solid var(--moss);
+    outline-offset: 2px;
+  }
+  .nav-item:focus-visible,
+  .leaf-stop-btn:focus-visible {
+    outline: 2px solid var(--moss-soft);
+    outline-offset: 2px;
+  }
+  /* AI enable toggle: reveal focus on the visible slider, not the offscreen input */
+  .switch input:focus-visible + .switch-slider {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--moss) 35%, transparent);
+  }
+
+  /* Utility: visually hidden but SR-accessible */
+  .visually-hidden {
+    position: absolute !important;
+    width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0);
+    white-space: nowrap; border: 0;
+  }
+  .label-hint {
+    font-weight: 400; font-size: 11.5px; color: var(--ink-muted); margin-left: 4px;
+  }
+
+  /* Recent-task pills shown above the goal + description inputs in the start modal.
+     Click to autofill. Backend dedups case-insensitively before we render. */
+  .recent-pills {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    margin-top: 8px;
+  }
+  .recent-pills-lead {
+    font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-muted); font-weight: 600; margin-right: 4px;
+  }
+  .recent-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 11px; border-radius: 999px;
+    background: color-mix(in oklab, var(--moss) 12%, var(--paper-2));
+    border: 1px solid color-mix(in oklab, var(--moss) 28%, var(--line));
+    color: var(--ink); font-family: var(--font-sans); font-size: 12px; font-weight: 500;
+    cursor: pointer; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    transition: background 0.12s, border-color 0.12s, transform 0.08s;
+  }
+  .recent-pill:hover {
+    background: color-mix(in oklab, var(--moss) 22%, var(--paper-2));
+    border-color: var(--moss);
+  }
+  .recent-pill:active { transform: scale(0.97); }
+  .recent-pill:focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; }
+  .stat-picker-wrap { position: relative; display: inline-block; }
+  .modal-field-label {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12.5px; font-weight: 600; color: var(--ink-mid);
+  }
+  .modal-field-label svg { width: 14px; height: 14px; color: var(--moss-deep); flex-shrink: 0; }
 
   /* Mascot in sidebar bottom-left with bubble underneath */
   .mascot-slot {
@@ -460,7 +533,7 @@
   .insight-eyebrow {
     display: inline-flex; align-items: center; gap: 6px;
     font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase;
-    color: var(--ink-muted); font-weight: 600; margin-bottom: 14px;
+    color: var(--ink-muted); font-weight: 600; margin-bottom: 22px;
   }
   .insight-eyebrow svg { width: 12px; height: 12px; }
   .insight-card.whatif .insight-eyebrow { color: var(--peak-line); }
@@ -492,10 +565,11 @@
   }
   .insight-item b { color: var(--ink); font-weight: 600; }
   .insight-foot {
-    margin-top: auto; padding-top: 12px; border-top: 1px dashed var(--line);
+    margin-top: auto; padding-top: 20px; border-top: 1px dashed var(--line);
     font-family: var(--font-serif); font-style: italic; font-size: 12.5px;
     color: var(--ink-muted);
   }
+  .insight-list + .insight-foot { margin-top: 20px; }
 
   /* ----- SESSION PAGE ----- */
   .session-goal-block { display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
