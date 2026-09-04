@@ -409,7 +409,7 @@
           </div>
           <div class="tag-input-box" id="denyTagBox">
             <span class="tag-pill-list" id="denyTagList"></span>
-            <input type="text" class="tag-input" id="denyTagInput" placeholder="Add a site or app (Enter or comma)">
+            <input type="text" class="tag-input" id="denyTagInput" placeholder="Add a site or app (Enter or comma)" autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-form-type="other">
           </div>
           <div class="chip-row" id="denyChips"></div>
         </section>
@@ -599,7 +599,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.5" fill="currentColor" stroke-width="2"/></svg>
         What's your task today?
       </label>
-      <input type="text" id="startGoalInput" placeholder="I will study math.">
+      <input type="text" id="startGoalInput" placeholder="I will study math." autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-form-type="other">
       <div class="recent-pills" id="recentGoalPills" hidden></div>
     </div>
 
@@ -609,7 +609,7 @@
         Detailed description <span class="label-hint">(minimum 25 characters)</span>
       </label>
       <div class="desc-input-box" id="descInputBox">
-        <textarea id="startDescriptionInput" rows="3" placeholder="Describe what you will work on in detail (e.g., 'Going to study integral calculus concepts and watch tutorial videos on integration techniques')..."></textarea>
+        <textarea id="startDescriptionInput" rows="3" placeholder="Describe what you will work on in detail (e.g., 'Going to study integral calculus concepts and watch tutorial videos on integration techniques')..." autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-form-type="other"></textarea>
         <div class="desc-char-counter" id="descCharCount">0 characters — 25 minimum</div>
         <div class="desc-denial-reason" id="descDenialReason" style="display:none;"></div>
       </div>
@@ -718,7 +718,7 @@
     </div>
     <div class="cyber-justify" id="cyberJustify" style="display:none;">
       <div class="cyber-justify-label">Explain how this is actually work — the local AI will fact-check you:</div>
-      <textarea id="cyberJustifyInput" rows="3" placeholder="Because I'm using this to research my topic, look up a formula, email my teacher about the assignment..."></textarea>
+      <textarea id="cyberJustifyInput" rows="3" placeholder="Because I'm using this to research my topic, look up a formula, email my teacher about the assignment..." autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-form-type="other"></textarea>
       <div class="cyber-justify-error" id="cyberJustifyError" style="display:none;"></div>
       <div class="cyber-actions">
         <button class="cyber-btn ghost" id="cyberJustifyCancel">Cancel</button>
