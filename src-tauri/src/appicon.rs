@@ -15,16 +15,101 @@ fn paths() -> &'static Mutex<HashMap<String, String>> {
     P.get_or_init(Default::default)
 }
 
-/// Called by the monitor every tick with the foreground process.
+/// Called by the monitor every tick with the foreground process. The first time an exe is seen,
+/// its icon is written to the disk cache right away, so history rows keep it after the app closes.
 pub fn remember(exe: &str, path: &str) {
     if exe.is_empty() || path.is_empty() {
         return;
     }
     let exe = exe.to_lowercase();
-    let mut p = paths().lock();
-    if !p.contains_key(&exe) {
-        p.insert(exe, path.to_string());
+    {
+        let mut p = paths().lock();
+        if p.contains_key(&exe) {
+            return;
+        }
+        p.insert(exe.clone(), path.to_string());
     }
+    let file = cache(&exe);
+    if !file.exists() {
+        if let (Some(b), Some(dir)) = (extract(path), file.parent()) {
+            let _ = std::fs::create_dir_all(dir);
+            let _ = std::fs::write(&file, &b);
+        }
+    }
+}
+
+/// Full path of a running process named `exe`, for apps used before this build cached them.
+#[cfg(windows)]
+fn running_path(exe: &str) -> Option<String> {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
+        let mut e = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        let mut found = None;
+        let mut more = Process32FirstW(snap, &mut e).is_ok();
+        while more {
+            let len = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
+            if String::from_utf16_lossy(&e.szExeFile[..len]).eq_ignore_ascii_case(exe) {
+                if let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, e.th32ProcessID) {
+                    let mut buf = [0u16; 1024];
+                    let mut n = buf.len() as u32;
+                    let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut n).is_ok();
+                    let _ = CloseHandle(h);
+                    if ok {
+                        found = Some(String::from_utf16_lossy(&buf[..n as usize]));
+                        break;
+                    }
+                }
+            }
+            more = Process32NextW(snap, &mut e).is_ok();
+        }
+        let _ = CloseHandle(snap);
+        found
+    }
+}
+
+/// Installed-app path from the registry's App Paths key (Word, Excel, Chrome...), so an app that
+/// is closed and was never cached still gets its icon.
+#[cfg(windows)]
+fn app_path(exe: &str) -> Option<String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    let key: Vec<u16> = format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}")
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        let mut buf = [0u16; 1024];
+        let mut len = (buf.len() * 2) as u32;
+        let ok = unsafe {
+            RegGetValueW(root, PCWSTR(key.as_ptr()), PCWSTR::null(), RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr().cast()), Some(&mut len))
+        };
+        if ok.is_ok() {
+            let n = buf.iter().position(|&c| c == 0).unwrap_or(0);
+            let p = String::from_utf16_lossy(&buf[..n]).trim_matches('"').to_string();
+            if !p.is_empty() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn app_path(_exe: &str) -> Option<String> {
+    None
+}
+
+#[cfg(not(windows))]
+fn running_path(_exe: &str) -> Option<String> {
+    None
 }
 
 fn cache(exe: &str) -> PathBuf {
@@ -45,7 +130,8 @@ pub fn icon(exe: &str) -> Option<String> {
     let png = match std::fs::read(&file) {
         Ok(b) => b,
         Err(_) => {
-            let path = paths().lock().get(&exe).cloned()?;
+            let known = paths().lock().get(&exe).cloned();
+            let path = known.or_else(|| running_path(&exe)).or_else(|| app_path(&exe))?;
             let b = extract(&path)?;
             let _ = std::fs::create_dir_all(file.parent()?);
             let _ = std::fs::write(&file, &b);
@@ -146,6 +232,18 @@ mod tests {
     fn base64_pads() {
         assert_eq!(super::base64(b"Man"), "TWFu");
         assert_eq!(super::base64(b"M"), "TQ==");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn finds_running_explorer() {
+        assert!(super::running_path("explorer.exe").is_some());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn finds_word_in_app_paths() {
+        assert!(super::app_path("WINWORD.EXE").is_some_and(|p| p.to_lowercase().ends_with("winword.exe")));
     }
 
     #[cfg(windows)]
