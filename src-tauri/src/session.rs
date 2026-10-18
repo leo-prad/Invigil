@@ -12,6 +12,8 @@ use uuid::Uuid;
 // Seconds to suppress the drift overlay after the user dismisses it, so long as they
 // stay on the same continuous off-task streak. A fresh streak (any on_task in between)
 // resets this to 0, so a brand-new distraction still nags immediately.
+const UTILITY_STILL_SEC: i64 = 15;
+const UTILITY_WANDER_SEC: i64 = 120;
 const OVERLAY_COOLDOWN_SEC: i64 = 15;
 
 // Max seconds a user is allowed to sit on Invigil itself before it counts as off_task.
@@ -37,6 +39,8 @@ pub struct SessionState {
     pub drift_count: i64,
     pub current_status: String,
     pub current_app: String,
+    #[serde(default)]
+    pub current_process: String,
     pub current_detail: String,
     pub deep_focus_sec: i64,        // longest unbroken on-task streak
     pub current_streak_sec: i64,    // current unbroken on-task run
@@ -51,6 +55,19 @@ pub struct SessionState {
     // Invigil starts being classified as off_task like any other window. Reset when the
     // user switches to any non-Invigil window.
     pub invigil_focus_sec: i64,
+    // Utility apps (Explorer, Snipping Tool...): on task while "moving". See UTILITY_* consts.
+    #[serde(skip)]
+    pub utility: UtilityRun,
+}
+
+/// One unbroken stretch of utility-app use.
+#[derive(Debug, Clone, Default)]
+pub struct UtilityRun {
+    pub chain_start: Option<String>, // RFC3339 start of the stretch, for the wander relabel
+    pub wander_sec: i64,             // total seconds in utility apps this stretch
+    pub still_sec: i64,              // seconds since the window title last changed
+    pub last_title: String,
+    pub expired: bool,               // sticky until the user leaves utility apps
 }
 
 impl Default for SessionState {
@@ -70,6 +87,7 @@ impl Default for SessionState {
             drift_count: 0,
             current_status: "idle".into(),
             current_app: String::new(),
+            current_process: String::new(),
             current_detail: String::new(),
             deep_focus_sec: 0,
             current_streak_sec: 0,
@@ -81,6 +99,7 @@ impl Default for SessionState {
             memory_mb: 0.0,
             session_allowlist: HashSet::new(),
             invigil_focus_sec: 0,
+            utility: UtilityRun::default(),
         }
     }
 }
@@ -335,7 +354,8 @@ impl SessionManager {
         // at the warning" as off-task time — otherwise the Invigil grace would give the user
         // a free 30-second pass every time they stalled on the overlay instead of switching
         // back to work. Also used below to suppress re-emitting drift-detected each tick.
-        let is_drift_overlay_window = window.title == "Invigil Alert";
+        // The desktop notch is ours too: hovering it must not log an "Invigil" row.
+        let is_drift_overlay_window = window.title == "Invigil Alert" || window.title == "Invigil Notch";
         let invigil_streak_sec = self.state.lock().invigil_focus_sec;
         let is_session_allowed = {
             let s = self.state.lock();
@@ -348,9 +368,13 @@ impl SessionManager {
         };
 
         let mut used_llm = false;
-        let status = if is_drift_overlay_window {
-            "off_task"
-        } else if is_session_allowed {
+        let is_utility = classifier::is_utility_app(&window);
+        let mut status = if is_drift_overlay_window {
+            // The overlay is part of Invigil, not an app of its own: carry on with whatever
+            // the user was doing before it appeared (no new row, no extra drift).
+            if self.last_raw_status.lock().as_str() == "off_task" { "off_task" } else { "on_task" }
+        } else if is_session_allowed || is_utility {
+            // Utilities get their final verdict from the moving-window timers below.
             "on_task"
         } else {
             match classification {
@@ -394,7 +418,45 @@ impl SessionManager {
 
         state.is_idle = is_currently_idle;
         state.elapsed_sec += delta;
-        state.current_app = app_name.clone();
+
+        // Utility apps: on task while moving. A window title change (new Explorer folder)
+        // resets the still timer; sitting still past UTILITY_STILL_SEC or wandering past
+        // UTILITY_WANDER_SEC flips to off task. A wander expiry relabels the whole stretch.
+        let mut utility_relabel_since: Option<String> = None;
+        let mut utility_just_expired = false;
+        if is_utility && !is_session_allowed {
+            let u = &mut state.utility;
+            if u.chain_start.is_none() {
+                *u = UtilityRun { chain_start: Some(now_ts.to_rfc3339()), last_title: window.title.clone(), ..Default::default() };
+            } else {
+                u.wander_sec += delta;
+                if window.title != u.last_title {
+                    u.last_title = window.title.clone();
+                    u.still_sec = 0;
+                } else {
+                    u.still_sec += delta;
+                }
+            }
+            if !u.expired {
+                if u.wander_sec > UTILITY_WANDER_SEC {
+                    u.expired = true;
+                    utility_just_expired = true;
+                    utility_relabel_since = u.chain_start.clone();
+                } else if u.still_sec > UTILITY_STILL_SEC {
+                    u.expired = true;
+                    utility_just_expired = true;
+                }
+            }
+            if u.expired {
+                status = "off_task";
+            }
+        } else if !is_utility {
+            state.utility = UtilityRun::default();
+        }
+        if !is_drift_overlay_window {
+            state.current_app = app_name.clone();
+            state.current_process = window.process_name.clone();
+        }
 
         // Track continuous Invigil focus so the classifier can demote Invigil to off_task
         // once the user camps on it too long. Reset the moment the user switches away.
@@ -453,7 +515,9 @@ impl SessionManager {
         } else if idle_sec >= 20 && status == "on_task" {
             final_detail = format!("(Deep reading) {}", detail);
         }
-        state.current_detail = final_detail;
+        if !is_drift_overlay_window {
+            state.current_detail = final_detail;
+        }
 
         // Grace period logic.
         //
@@ -472,7 +536,10 @@ impl SessionManager {
         const MIN_DRIFT_ONSET_GRACE_SEC: i64 = 10;
 
         if status == "off_task" {
-            if prev_raw_status != "off_task" {
+            if is_utility {
+                // Utility timers already were the grace.
+                state.grace_remaining_sec = 0;
+            } else if prev_raw_status != "off_task" {
                 // Just started drifting — begin grace period
                 state.grace_remaining_sec = self.grace_period_sec.max(MIN_DRIFT_ONSET_GRACE_SEC);
             } else if state.grace_remaining_sec > 0 {
@@ -525,7 +592,38 @@ impl SessionManager {
         let prev_cat = self.last_category.lock().clone();
         let prev_title = self.last_window_title.lock().clone();
 
-        if effective_status != prev_status || category != prev_cat || window.title != prev_title {
+        // Grace just expired on the same window: the whole visit was drift, so relabel the
+        // open interval instead of leaving its first seconds as an "on task" row.
+        let grace_expired_same_window = effective_status == "off_task"
+            && prev_status == "on_task"
+            && prev_raw_status == "off_task"
+            && category == prev_cat
+            && window.title == prev_title;
+        if utility_just_expired {
+            match utility_relabel_since {
+                Some(ref since) => { let _ = self.db.set_intervals_status_since(&state.session_id, since, "off_task"); }
+                None if window.title == prev_title => {
+                    if let Some(ref id) = *self.last_interval_id.lock() {
+                        let _ = self.db.set_interval_status(id, "off_task");
+                    }
+                }
+                None => {}
+            }
+        }
+        if utility_just_expired && prev_status == "on_task" && window.title == prev_title {
+            state.drift_count += 1;
+            drift_triggered = true;
+            *self.last_status.lock() = effective_status;
+        } else if grace_expired_same_window {
+            if let Some(ref id) = *self.last_interval_id.lock() {
+                let _ = self.db.set_interval_status(id, "off_task");
+            }
+            state.drift_count += 1;
+            drift_triggered = true;
+            *self.last_status.lock() = effective_status;
+        } else if is_drift_overlay_window {
+            // Keep the previous app's interval open; see the status note above.
+        } else if effective_status != prev_status || category != prev_cat || window.title != prev_title {
             let now = Utc::now().to_rfc3339();
 
             // Close previous interval

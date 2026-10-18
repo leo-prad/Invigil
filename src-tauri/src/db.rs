@@ -547,6 +547,21 @@ impl Database {
         Ok(())
     }
 
+    pub fn set_interval_status(&self, id: &str, status: &str) -> SqlResult<()> {
+        let conn = self.conn.lock();
+        conn.execute("UPDATE intervals SET status=?2 WHERE id=?1", params![id, status])?;
+        Ok(())
+    }
+
+    pub fn set_intervals_status_since(&self, session_id: &str, since: &str, status: &str) -> SqlResult<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE intervals SET status=?3 WHERE session_id=?1 AND start_ts>=?2",
+            params![session_id, since, status],
+        )?;
+        Ok(())
+    }
+
     pub fn get_session_intervals(&self, session_id: &str) -> SqlResult<Vec<Interval>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
