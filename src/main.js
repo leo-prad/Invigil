@@ -72,7 +72,6 @@ async function init() {
   }
 
   buildCalendar();
-  setupElasticBounce();
 
   // Calendar month navigation
   const calNav = document.querySelector('.cal-nav');
@@ -440,70 +439,6 @@ function buildCalendar() {
     lastHoveredDate = null;
     clearHoverRange();
   });
-}
-
-// Fake iOS-style elastic bounce on the inner .content scroller. WebView2 on
-// Windows doesn't emit a native mouse-wheel overscroll animation, so when
-// the wheel is at either edge we translateY the .page element with rubber-
-// band resistance and spring back on release. Sidebar never moves because
-// .app is height:100vh and the bounce lives entirely inside .content.
-function setupElasticBounce() {
-  const scroller = document.querySelector('.content');
-  const page = document.querySelector('.page');
-  if (!scroller || !page) return;
-
-  const MAX = 120;        // hard cap on stretch in px
-  const RESISTANCE = 0.35; // input * resistance = how much offset actually gains
-  const IDLE_SPRING_MS = 55; // how long after last wheel event before we spring
-  let target = 0;
-  let current = 0;
-  let rafId = null;
-  let releaseTimer = null;
-
-  const setTransform = (v) => {
-    page.style.transform = v === 0 ? '' : `translate3d(0, ${v.toFixed(2)}px, 0)`;
-  };
-
-  const tick = () => {
-    const diff = target - current;
-    if (Math.abs(diff) < 0.4 && target === 0) {
-      current = 0;
-      setTransform(0);
-      rafId = null;
-      return;
-    }
-    current += diff * 0.22;
-    setTransform(current);
-    rafId = requestAnimationFrame(tick);
-  };
-  const ensureAnim = () => { if (rafId == null) rafId = requestAnimationFrame(tick); };
-
-  const releaseSoon = () => {
-    clearTimeout(releaseTimer);
-    releaseTimer = setTimeout(() => { target = 0; ensureAnim(); }, IDLE_SPRING_MS);
-  };
-
-  scroller.addEventListener('wheel', (e) => {
-    const top = scroller.scrollTop;
-    const max = scroller.scrollHeight - scroller.clientHeight;
-    const atTop = top <= 0 && e.deltaY < 0;
-    const atBottom = top >= max - 1 && e.deltaY > 0;
-    // If we're translated and the user is scrolling back into content,
-    // release the bounce immediately so the scroll feels connected.
-    if (!atTop && !atBottom) {
-      if (target !== 0) { target = 0; ensureAnim(); }
-      return;
-    }
-    e.preventDefault();
-    const dir = atTop ? 1 : -1;
-    // Rubber band: further from 0, each new unit of input gives less offset.
-    const dist = Math.abs(target);
-    const resist = RESISTANCE * (1 - dist / MAX);
-    const delta = dir * Math.abs(e.deltaY) * Math.max(resist, 0.04);
-    target = Math.max(-MAX, Math.min(MAX, target + delta));
-    ensureAnim();
-    releaseSoon();
-  }, { passive: false });
 }
 
 let anchorDate = null;
@@ -2343,12 +2278,31 @@ function renderActivityList(container, items) {
     const bgStyle = icon.hasIcon ? 'background:transparent;' : `background:${color};`;
     const iconClass = icon.hasIcon ? 'a-icon' : 'a-icon no-icon';
     return `<div class="activity-row">
-      <div class="${iconClass}" style="${bgStyle}display:flex;align-items:center;justify-content:center;">${icon.html}</div>
+      <div class="${iconClass}" data-exe="${a.process_name || ''}" style="${bgStyle}display:flex;align-items:center;justify-content:center;">${icon.html}</div>
       <div><span class="a-name">${a.category || a.process_name}</span> <span class="a-detail">— ${a.window_title || ''}</span></div>
       <div class="a-dur">${timeDisplay}</div>
       <span class="a-badge ${status === 'on_task' ? 'on-task' : 'drift'}">${status === 'on_task' ? 'on task' : 'drift'}</span>
     </div>`;
   }).join('');
+  hydrateExeIcons(container);
+}
+
+// Swap each row's placeholder/logo for the exe's real icon (backend appicon.rs).
+// Only hits are cached, so an app that gets its path later still picks up its icon.
+const _exeIconCache = new Map();
+function hydrateExeIcons(container) {
+  container.querySelectorAll('.a-icon[data-exe]').forEach(el => {
+    const exe = el.dataset.exe;
+    if (!exe) return;
+    const apply = url => {
+      if (!url || !el.isConnected) return;
+      el.classList.remove('no-icon');
+      el.style.background = 'transparent';
+      el.innerHTML = `<img src="${url}" width="22" height="22" alt="" draggable="false">`;
+    };
+    if (_exeIconCache.has(exe)) return apply(_exeIconCache.get(exe));
+    invoke('app_icon', { exe }).then(url => { if (url) _exeIconCache.set(exe, url); apply(url); }).catch(() => {});
+  });
 }
 
 function formatDuration(ms) {

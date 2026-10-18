@@ -358,7 +358,7 @@ impl SessionManager {
                 Classification::OnTask => "on_task",
                 Classification::Ambiguous => {
                     let ollama_up = *self.ollama_available.lock();
-                    if ollama_up {
+                    if ollama_up && !classifier::is_opaque_ai_assistant(&window) {
                         used_llm = true;
                         match llm::classify_ambiguous(&goal, &description, &app_name, &window.title) {
                             Some(llm::LlmVerdict::OnTask) => "on_task",

@@ -67,6 +67,7 @@ pub fn get_active_window() -> WindowInfo {
             (String::new(), String::new())
         };
 
+        crate::appicon::remember(&process_name, &exe_path);
         WindowInfo { title, process_name, exe_path }
     }
 }

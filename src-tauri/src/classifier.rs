@@ -97,6 +97,18 @@ pub fn classify_tier0(window: &WindowInfo, profile: &Profile) -> (Classification
     (Classification::Ambiguous, String::new())
 }
 
+/// AI chat assistants whose desktop window title never shows conversation content (just the
+/// app name, e.g. "Claude" or "ChatGPT"). Tier 1's small local model tends to give these the
+/// benefit of the doubt ("it's an AI assistant, could be helping with the task") even though
+/// there is literally no title content to judge — so these are routed straight to the
+/// deterministic keyword heuristic instead of the LLM, skipping the unreliable judgment call.
+pub fn is_opaque_ai_assistant(window: &WindowInfo) -> bool {
+    let process_lower = window.process_name.to_lowercase();
+    let title_lower = window.title.to_lowercase();
+    let opaque_ai_apps = ["claude", "chatgpt", "copilot", "gemini", "perplexity"];
+    opaque_ai_apps.iter().any(|app| process_lower.contains(app) || title_lower.contains(app))
+}
+
 /// Simple pattern matching: checks if the pattern substring appears in
 /// either the window title or the process name.
 /// Supports a few special forms:
