@@ -1,4 +1,5 @@
 mod ai_setup;
+mod appicon;
 mod bounties;
 mod classifier;
 mod db;
@@ -242,6 +243,11 @@ struct RecentTasks {
 fn get_recent_tasks(state: tauri::State<'_, AppState>) -> Result<RecentTasks, String> {
     let (goals, descriptions) = state.db.get_recent_task_suggestions(3).map_err(|e| e.to_string())?;
     Ok(RecentTasks { goals, descriptions })
+}
+
+#[tauri::command]
+async fn app_icon(exe: String) -> Option<String> {
+    appicon::icon(&exe)
 }
 
 // --- Profile commands ---
@@ -611,6 +617,7 @@ pub fn run() {
             rename_session,
             get_top_tools,
             get_recent_tasks,
+            app_icon,
             // Dashboard
             get_dashboard_data,
             get_day_stats,

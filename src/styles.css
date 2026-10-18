@@ -48,8 +48,7 @@
   button, .nav-item, .btn, .chip, .cyber-btn, [role="button"] { cursor: pointer; }
   html, body { margin: 0; padding: 0; height: 100%; }
   /* Lock the outer chrome. `.content` is the only scroll container, and
-     a JS-driven translateY on `.page` (see main.js elasticBounce) fakes
-     iOS-style bounce on overscroll so the sidebar never moves. */
+     the sidebar never moves. No overscroll bounce. */
   html, body { overflow: hidden; overscroll-behavior: none; }
   body {
     margin: 0;
