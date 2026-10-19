@@ -176,7 +176,7 @@ async function checkOllamaOnLoad() {
       <span class="ico">💡</span>
       <div>
         <b>Local AI isn't set up.</b> Invigil falls back to a keyword-match rule when it can't ask a local model — that misses a lot of nuance (e.g. "watching a Khan Academy math video" looks like YouTube, not studying).
-        Install <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> and pull the <code>gemma:e4b</code> model for much better classification.
+        Install <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> and pull the <code>gemma3:4b</code> model for much better classification.
       </div>
       <button class="close" id="ollamaTipClose" title="Dismiss">×</button>
     `;
