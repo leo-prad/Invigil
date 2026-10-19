@@ -44,6 +44,13 @@ const state = { mode: 'overall', start: null, end: null };
 // ─── Init ────────────────────────────────────────────────────────────
 
 async function init() {
+  if (window.location.hash === '#notch') {
+    document.body.classList.add('overlay-mode', 'notch-mode');
+    document.querySelector('.page-wrap')?.remove();
+    document.getElementById('cyberOverlay')?.remove();
+    setupNotch();
+    return;
+  }
   if (window.location.hash === '#overlay-leaf') {
     document.body.classList.add('overlay-mode');
     document.querySelector('.page-wrap')?.remove();
@@ -65,6 +72,16 @@ async function init() {
     return;
   }
 
+  // Pick up a session that is already running (window reload, or started elsewhere).
+  try {
+    const st = await invoke('get_session_state');
+    if (st?.active) {
+      currentSessionId = st.session_id;
+      setSessionUI(true);
+      applySessionState(st);
+    }
+  } catch {}
+
   try {
     liveData = await invoke('get_dashboard_data');
   } catch (e) {
@@ -72,7 +89,6 @@ async function init() {
   }
 
   buildCalendar();
-  setupElasticBounce();
 
   // Calendar month navigation
   const calNav = document.querySelector('.cal-nav');
@@ -115,12 +131,13 @@ async function init() {
       currentSessionId = sessionState.session_id;
       navigateTo('session');
       applySessionState(sessionState);
+      setSessionHeader(sessionState.goal, sessionState.description, sessionState.duration_target_min, new Date(sessionState.started_at));
     }
   } catch (e) {
     console.warn('Could not get session state:', e);
   }
 
-  setSessionOffState();
+  if (!sessionActive) setSessionOffState();
   renderDashActivity();
   renderInsights();
   setupListeners();
@@ -442,70 +459,6 @@ function buildCalendar() {
   });
 }
 
-// Fake iOS-style elastic bounce on the inner .content scroller. WebView2 on
-// Windows doesn't emit a native mouse-wheel overscroll animation, so when
-// the wheel is at either edge we translateY the .page element with rubber-
-// band resistance and spring back on release. Sidebar never moves because
-// .app is height:100vh and the bounce lives entirely inside .content.
-function setupElasticBounce() {
-  const scroller = document.querySelector('.content');
-  const page = document.querySelector('.page');
-  if (!scroller || !page) return;
-
-  const MAX = 120;        // hard cap on stretch in px
-  const RESISTANCE = 0.35; // input * resistance = how much offset actually gains
-  const IDLE_SPRING_MS = 55; // how long after last wheel event before we spring
-  let target = 0;
-  let current = 0;
-  let rafId = null;
-  let releaseTimer = null;
-
-  const setTransform = (v) => {
-    page.style.transform = v === 0 ? '' : `translate3d(0, ${v.toFixed(2)}px, 0)`;
-  };
-
-  const tick = () => {
-    const diff = target - current;
-    if (Math.abs(diff) < 0.4 && target === 0) {
-      current = 0;
-      setTransform(0);
-      rafId = null;
-      return;
-    }
-    current += diff * 0.22;
-    setTransform(current);
-    rafId = requestAnimationFrame(tick);
-  };
-  const ensureAnim = () => { if (rafId == null) rafId = requestAnimationFrame(tick); };
-
-  const releaseSoon = () => {
-    clearTimeout(releaseTimer);
-    releaseTimer = setTimeout(() => { target = 0; ensureAnim(); }, IDLE_SPRING_MS);
-  };
-
-  scroller.addEventListener('wheel', (e) => {
-    const top = scroller.scrollTop;
-    const max = scroller.scrollHeight - scroller.clientHeight;
-    const atTop = top <= 0 && e.deltaY < 0;
-    const atBottom = top >= max - 1 && e.deltaY > 0;
-    // If we're translated and the user is scrolling back into content,
-    // release the bounce immediately so the scroll feels connected.
-    if (!atTop && !atBottom) {
-      if (target !== 0) { target = 0; ensureAnim(); }
-      return;
-    }
-    e.preventDefault();
-    const dir = atTop ? 1 : -1;
-    // Rubber band: further from 0, each new unit of input gives less offset.
-    const dist = Math.abs(target);
-    const resist = RESISTANCE * (1 - dist / MAX);
-    const delta = dir * Math.abs(e.deltaY) * Math.max(resist, 0.04);
-    target = Math.max(-MAX, Math.min(MAX, target + delta));
-    ensureAnim();
-    releaseSoon();
-  }, { passive: false });
-}
-
 let anchorDate = null;
 let lastHoveredDate = null;
 let shiftDown = false;
@@ -614,9 +567,12 @@ function smoothPath(points) {
     const p2 = points[i + 1];
     const p3 = points[i + 2] || p2;
     const c1x = p1[0] + (p2[0] - p0[0]) / 6;
-    const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    // Control y clamped between the two endpoints so the curve never overshoots (no fake dips
+    // below 0 before a spike).
+    const lo = Math.min(p1[1], p2[1]), hi = Math.max(p1[1], p2[1]);
+    const c1y = Math.min(hi, Math.max(lo, p1[1] + (p2[1] - p0[1]) / 6));
     const c2x = p2[0] - (p3[0] - p1[0]) / 6;
-    const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    const c2y = Math.min(hi, Math.max(lo, p2[1] - (p3[1] - p1[1]) / 6));
     d += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2[0].toFixed(2)},${p2[1].toFixed(2)}`;
   }
   return d;
@@ -702,10 +658,10 @@ let trendStat = 'focus_min';
 // with the picker's selected option. (Old code had a distinct `overallTitle: 'Attention span'`
 // for focus_min, which read as a broken cross-reference against the picker's "Focus time".)
 const TREND_STAT_META = {
-  focus_min:   { label: 'Focus time',    get: d => d.total_minutes,          unit: 'min' },
+  focus_min:   { label: 'Focus time',    get: d => d.total_minutes,          unit: 'min', sum: true },
   on_task_pct: { label: 'On-task %',     get: d => Math.round(d.on_task_pct), unit: '%' },
-  sessions:    { label: 'Sessions/day',  get: d => d.session_count,          unit: '' },
-  points:      { label: 'Points/day',    get: d => d.points || 0,            unit: '' },
+  sessions:    { label: 'Sessions/day',  get: d => d.session_count,          unit: '', sum: true },
+  points:      { label: 'Points/day',    get: d => d.points || 0,            unit: '', sum: true },
 };
 
 function renderTrend() {
@@ -774,12 +730,13 @@ function renderTrend() {
     sub.textContent = `${series.length} days · ${meta.label.toLowerCase()}`;
   }
 
-  // Headline number: average of the selected stat over the current series. For percentages
-  // this is a straight arithmetic mean; for focus minutes it's the daily average.
+  // Headline number: total over the series for countable stats (focus minutes, sessions,
+  // points) so it matches the graph; plain average for percentages.
   const values = series.map(meta.get);
-  const avg = values.length ? Math.round(values.reduce((s, v) => s + v, 0) / values.length) : 0;
-  num.innerHTML = `${avg}<span class="pct"> ${meta.unit}</span>`;
-  delta.innerHTML = `<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 8l4-4 4 4"/></svg> avg`;
+  const total = values.reduce((s, v) => s + v, 0);
+  const headline = meta.sum ? total : (values.length ? Math.round(total / values.length) : 0);
+  num.innerHTML = `${headline}<span class="pct"> ${meta.unit}</span>`;
+  delta.innerHTML = `<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 8l4-4 4 4"/></svg> ${meta.sum ? 'total' : 'avg'}`;
 
   // Chart is always rendered now, regardless of mode — that's the main fix. Range/single
   // used to blank out `viz` entirely, which read as "the graph broke."
@@ -1371,9 +1328,9 @@ function setSessionUI(active) {
     startSessionBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> End session`;
     startSessionBtn.classList.add('danger');
     demoDriftBtn.style.display = 'inline-flex';
-    document.getElementById('sessionNowBar').style.display = '';
+    // Now bar stays hidden: the user doesn't want the current app shown on the page.
     document.getElementById('sessionActivityCard').style.display = '';
-    if (leafCard) leafCard.style.display = 'flex';
+    if (leafCard) leafCard.style.display = 'none'; // the desktop notch replaces the in-app leaf bar
     const advP = document.getElementById('advPanel');
     if (advP) advP.style.display = '';
   } else {
@@ -1635,16 +1592,7 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
     if (sViz) sViz.innerHTML = '';
     applySessionState(sessionState);
 
-    // Update session page goal text
-    const goalEl = document.querySelector('.session-goal');
-    if (goalEl) goalEl.innerHTML = pickSessionGreeting(goal, description);
-    const metaEl = document.querySelector('.session-goal-meta');
-    if (metaEl) {
-      const now = new Date();
-      const time = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-      const durText = durationMin ? `${durationMin}-minute timer` : 'Endless mode';
-      metaEl.innerHTML = `<span>Started ${time}</span><span class="sep">·</span><span>${durText}</span>`;
-    }
+    setSessionHeader(goal, description, durationMin, new Date());
 
     // Start local timer for smooth UI updates between ticks
     startLocalTimer(durationMin);
@@ -1790,7 +1738,12 @@ function showCyberOverlay(app, detail, elapsedSec, goal) {
 
 function hideCyberOverlay() {
   if (cyberOverlay) cyberOverlay.style.display = 'none';
-  try { invoke('hide_drift_overlay'); } catch(e) {}
+  // Hide this window directly too: if the backend call fails (app restarting, session gone),
+  // an invisible full-screen window would otherwise keep eating clicks.
+  if (location.hash === '#overlay-drift') {
+    try { window.__TAURI__.window.getCurrentWindow().hide(); } catch(e) {}
+  }
+  invoke('hide_drift_overlay').catch(() => {});
 }
 
 demoDriftBtn.addEventListener('click', () => showCyberOverlay('Discord', '#general', 47, 'Calc HW'));
@@ -1912,8 +1865,15 @@ function buildWarningTicker(id, count) {
   }
   track.innerHTML = icons + icons;
 }
-buildWarningTicker('cyberTickerTop', 8);
-buildWarningTicker('cyberTickerBottom', 8);
+// Each half of the track must be wider than the screen (icon 64 + gap 56 = 120px), or the
+// loop runs out of icons before it wraps and the row visibly ends.
+const TICKER_COUNT = Math.ceil(Math.max(window.screen?.width || 1920, 1920) / 120) + 2;
+buildWarningTicker('cyberTickerTop', TICKER_COUNT);
+buildWarningTicker('cyberTickerBottom', TICKER_COUNT);
+// Duration scales with track length so the speed stays constant (old: ~120 / 96 px/s; now a
+// touch faster).
+document.getElementById('cyberTickerTop').style.animationDuration = `${(TICKER_COUNT * 120) / 130}s`;
+document.getElementById('cyberTickerBottom').style.animationDuration = `${(TICKER_COUNT * 120) / 104}s`;
 
 // ─── Tag input fields ────────────────────────────────────────────────
 
@@ -2019,12 +1979,36 @@ timeCustomInput.addEventListener('focus', () => selectTimeOption(timeCustomBox))
 
 // ─── Roulette digits ─────────────────────────────────────────────────
 
+// Only digits that actually changed spin; unchanged spans are left alone so they don't flicker.
 function roulette(el, newText, prevText) {
-  const chars = newText.split(''), prev = (prevText || '').padEnd(chars.length).split('');
-  el.innerHTML = chars.map((c, i) => `<span class="rd${c !== prev[i] ? ' roll' : ''}">${c}</span>`).join('');
+  const spans = el.querySelectorAll(':scope > span.rd');
+  if (spans.length !== newText.length) {
+    const prev = (prevText || '').padEnd(newText.length).split('');
+    el.innerHTML = newText.split('').map((c, i) => `<span class="rd${c !== prev[i] ? ' roll' : ''}">${c}</span>`).join('');
+    return;
+  }
+  newText.split('').forEach((c, i) => {
+    const sp = spans[i];
+    if (sp.textContent === c) return;
+    sp.textContent = c;
+    sp.classList.remove('roll'); void sp.offsetWidth; sp.classList.add('roll');
+  });
 }
 
 // ─── Session metrics ─────────────────────────────────────────────────
+
+// Session page heading: greeting + "Started 10:32 PM · 25-minute timer".
+function setSessionHeader(goal, description, durationMin, startedAt) {
+  const goalEl = document.querySelector('.session-goal');
+  if (goalEl) goalEl.innerHTML = pickSessionGreeting(goal, description);
+  const metaEl = document.querySelector('.session-goal-meta');
+  if (metaEl) {
+    const d = isNaN(startedAt) ? new Date() : startedAt;
+    const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const durText = durationMin ? `${durationMin}-minute timer` : 'Endless mode';
+    metaEl.innerHTML = `<span>Started ${time}</span><span class="sep">·</span><span>${durText}</span>`;
+  }
+}
 
 function setSessionOffState() {
   _lastActivityKey = '';
@@ -2033,6 +2017,7 @@ function setSessionOffState() {
   document.getElementById('sMetElapsed').textContent = '—:——';
   document.getElementById('sMetDeep').textContent = '—:——';
   document.getElementById('sMetDrifts').textContent = '—';
+  ['sMetOnTask','sMetElapsed','sMetDeep','sMetDrifts'].forEach(id => delete document.getElementById(id).dataset.lastVal);
   ['sMetOnTaskSub','sMetElapsedSub','sMetDeepSub','sMetDriftsSub'].forEach(id => {
     document.getElementById(id).textContent = '—';
   });
@@ -2047,13 +2032,17 @@ function setSessionOffState() {
 function safeRoulette(el, textVal, defaultVal) {
   if (!el) return;
   if (el.dataset.lastVal === textVal) return;
+  const prev = el.dataset.lastVal ?? defaultVal;
   el.dataset.lastVal = textVal;
-  roulette(el, textVal, defaultVal);
+  roulette(el, textVal, prev);
 }
 
+let lastTickState = null, lastTickAt = 0;
 function applySessionState(s) {
   if (!s.active) return;
   elapsedSec = s.elapsed_sec;
+  lastTickState = s; lastTickAt = Date.now();
+  if (!timerInterval) startLocalTimer();
   const pct = s.elapsed_sec > 0 ? Math.round((s.on_task_sec / s.elapsed_sec) * 100) : 100;
   safeRoulette(document.getElementById('sMetOnTask'), String(pct), '—');
   document.getElementById('sMetOnTaskSub').textContent = `${pct}% lifetime`;
@@ -2074,7 +2063,7 @@ function applySessionState(s) {
   document.getElementById('sMetDeepSub').textContent = `streak ${String(Math.floor(s.current_streak_sec/60)).padStart(2,'0')}:${String(s.current_streak_sec%60).padStart(2,'0')}`;
 
   safeRoulette(document.getElementById('sMetDrifts'), String(s.drift_count), '—');
-  document.getElementById('sMetDriftsSub').textContent = s.drift_count === 0 ? 'none yet' : `${s.drift_count} total`;
+  document.getElementById('sMetDriftsSub').textContent = s.drift_count === 0 ? 'none yet' : ' '; // nbsp keeps the row height so tiles stay aligned
 
   // Update "now" bar
   const nowBar = document.getElementById('sessionNowBar');
@@ -2082,32 +2071,42 @@ function applySessionState(s) {
     const glyph = nowBar.querySelector('.glyph');
     const path = nowBar.querySelector('.path');
     const verdict = nowBar.querySelector('.verdict');
-    if (glyph && s.current_app) glyph.textContent = s.current_app.slice(0, 2);
+    const glyphKey = `${s.current_app}|${s.current_process || ''}`;
+    if (glyph && s.current_app && glyph.dataset.key !== glyphKey) {
+      glyph.dataset.key = glyphKey;
+      const icon = getAppIconHtml(s.current_app, s.current_process);
+      glyph.innerHTML = `<div class="a-icon${icon.hasIcon ? '' : ' no-icon'}" data-exe="${s.current_process || ''}" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;">${icon.html}</div>`;
+      hydrateExeIcons(glyph);
+    }
     if (path) path.innerHTML = `${s.current_app} <span class="muted">— ${s.current_detail}</span>`;
     if (verdict) verdict.textContent = s.current_status === 'on_task' ? 'on task' : 'off task';
   }
 
+  updateLeafCard(s);
+}
+
+// Fills the Focus bar (in-app card and the desktop notch window).
+// Leaf/notch timer (remaining, or elapsed in endless mode). Also called every second by the
+// notch window between 5s ticks.
+function updateLeafTime(s) {
+  const leafTime = document.getElementById('leafRemainingTime');
+  if (!leafTime) return;
+  const fmt = (x) => `${String(Math.floor(x / 60)).padStart(2,'0')}:${String(x % 60).padStart(2,'0')}`;
+  const timeStr = s.duration_target_min
+    ? fmt(Math.max(0, s.duration_target_min * 60 - s.elapsed_sec))
+    : fmt(s.elapsed_sec);
+  if (timeStr === prevLeafTimeText) return;
+  roulette(leafTime, timeStr, prevLeafTimeText || '--:--');
+  prevLeafTimeText = timeStr;
+}
+
+function updateLeafCard(s) {
   // Update Leaf Letout Card overlay
   const leafCard = document.getElementById('leafLetoutCard');
   if (leafCard) {
-    leafCard.style.display = s.active ? 'flex' : 'none';
+    leafCard.style.display = s.active && location.hash === '#notch' ? 'flex' : 'none';
     
-    // Remaining time calculation with roulette spinning animation
-    const leafTime = document.getElementById('leafRemainingTime');
-    if (leafTime) {
-      let timeStr = '--:--';
-      if (s.duration_target_min) {
-        const totalTargetSec = s.duration_target_min * 60;
-        const remSec = Math.max(0, totalTargetSec - s.elapsed_sec);
-        const remM = Math.floor(remSec / 60), remS = remSec % 60;
-        timeStr = `${String(remM).padStart(2,'0')}:${String(remS).padStart(2,'0')}`;
-      } else {
-        const m = Math.floor(s.elapsed_sec / 60), sec = s.elapsed_sec % 60;
-        timeStr = `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
-      }
-      roulette(leafTime, timeStr, prevLeafTimeText || '--:--');
-      prevLeafTimeText = timeStr;
-    }
+    updateLeafTime(s);
 
     // Active App / Website
     const leafApp = document.getElementById('leafActiveApp');
@@ -2201,12 +2200,21 @@ let leafXenoCache = '';
 function startLocalTimer(durationMin) {
   if (timerInterval) clearInterval(timerInterval);
   timerInterval = setInterval(() => {
-    if (!sessionActive) { clearInterval(timerInterval); return; }
-    elapsedSec++;
-    const m = Math.floor(elapsedSec / 60), s = elapsedSec % 60;
-    const t = `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-    roulette(document.getElementById('sMetElapsed'), t, prevElapsedText);
-    prevElapsedText = t;
+    if (!sessionActive) { clearInterval(timerInterval); timerInterval = null; return; }
+    // Backend ticks every 5s; fill the gaps locally from the last tick so every second shows.
+    const fmt = (x) => `${String(Math.floor(x / 60)).padStart(2,'0')}:${String(x % 60).padStart(2,'0')}`;
+    const ls = lastTickState;
+    const since = ls ? Math.min(5, Math.floor((Date.now() - lastTickAt) / 1000)) : 0;
+    elapsedSec = ls ? ls.elapsed_sec + since : elapsedSec + 1;
+    const t = fmt(elapsedSec);
+    if (t !== prevElapsedText) {
+      safeRoulette(document.getElementById('sMetElapsed'), t, prevElapsedText);
+      prevElapsedText = t;
+    }
+    if (ls && ls.current_streak_sec > 0) {
+      safeRoulette(document.getElementById('sMetDeep'), fmt(ls.deep_focus_sec + since), '—:——');
+      document.getElementById('sMetDeepSub').textContent = `streak ${fmt(ls.current_streak_sec + since)}`;
+    }
   }, 1000);
 }
 
@@ -2283,33 +2291,35 @@ function renderSessionTimeline() {
     if (tKey === _lastTimelineKey) return;
     _lastTimelineKey = tKey;
 
-    const W = 600, H = 50;
+    // Midline = neutral. On task rises above it, drift dips below with a red fill. No green fill above (user is deutan colorblind).
+    const W = 600, H = 60, MID = H / 2, AMP = MID - 6;
     const n = Math.max(intervals.length, 2);
     const step = W / (n - 1 || 1);
+    const val = (st) => st === 'on_task' ? 1 : st === 'off_task' ? -1 : 0;
+    const points = intervals.map((inv, i) => [i * step, MID - val(inv.status) * AMP]);
+    if (points.length === 1) points.push([W, points[0][1]]);
 
-    const points = intervals.map((inv, i) => {
-      const val = inv.status === 'on_task' ? 100 : inv.status === 'off_task' ? 0 : 50;
-      const x = i * step;
-      const y = H - (val / 100) * (H - 12) - 6;
-      return [x, y];
-    });
-
-    const pathD = points.reduce((acc, pt, i) => i === 0 ? `M ${pt[0]} ${pt[1]}` : `${acc} L ${pt[0]} ${pt[1]}`, '');
-    const areaD = `${pathD} L ${points[points.length-1][0]} ${H} L 0 ${H} Z`;
+    // Smooth S-curves between points (control points at the x-midpoint: no overshoot).
+    const pathD = points.reduce((acc, pt, i) => {
+      if (i === 0) return `M ${pt[0]} ${pt[1]}`;
+      const [px, py] = points[i - 1], mx = (px + pt[0]) / 2;
+      return `${acc} C ${mx} ${py}, ${mx} ${pt[1]}, ${pt[0]} ${pt[1]}`;
+    }, '');
     const lastPt = points[points.length - 1];
+    const areaD = `${pathD} L ${lastPt[0]} ${MID} L 0 ${MID} Z`;
 
     viz.innerHTML = `
       <svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true" style="width:100%;height:100%;">
         <defs>
-          <linearGradient id="sessionTimelineFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="var(--moss)" stop-opacity="0.35"/>
-            <stop offset="100%" stop-color="var(--moss)" stop-opacity="0"/>
+          <clipPath id="sessionBelowMid"><rect x="0" y="${MID}" width="${W}" height="${H - MID}"/></clipPath>
+          <linearGradient id="sessionDriftFill" gradientUnits="userSpaceOnUse" x1="0" y1="${MID}" x2="0" y2="${H}">
+            <stop offset="0%" stop-color="#C0563C" stop-opacity="0.05"/>
+            <stop offset="100%" stop-color="#C0563C" stop-opacity="0.38"/>
           </linearGradient>
         </defs>
-        <line x1="0" y1="6" x2="${W}" y2="6" stroke="var(--line)" stroke-dasharray="2 4"/>
-        <line x1="0" y1="${H-6}" x2="${W}" y2="${H-6}" stroke="var(--line)" stroke-dasharray="2 4"/>
-        <path d="${areaD}" fill="url(#sessionTimelineFill)"/>
-        <path d="${pathD}" fill="none" stroke="var(--moss-deep)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+        <path d="${areaD}" fill="url(#sessionDriftFill)" clip-path="url(#sessionBelowMid)"/>
+        <line x1="0" y1="${MID}" x2="${W}" y2="${MID}" stroke="var(--line)" stroke-dasharray="2 4" vector-effect="non-scaling-stroke"/>
+        <path d="${pathD}" fill="none" stroke="var(--moss-deep)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
       </svg>
       <div class="session-dot" style="position:absolute; left:${(lastPt[0]/W*100).toFixed(1)}%; top:${(lastPt[1]/H*100).toFixed(1)}%; width:8px; height:8px; border-radius:50%; background:var(--moss-deep); box-shadow: 0 0 0 4px color-mix(in oklab, var(--moss) 30%, transparent); transform:translate(-50%,-50%);"></div>
     `;
@@ -2343,12 +2353,31 @@ function renderActivityList(container, items) {
     const bgStyle = icon.hasIcon ? 'background:transparent;' : `background:${color};`;
     const iconClass = icon.hasIcon ? 'a-icon' : 'a-icon no-icon';
     return `<div class="activity-row">
-      <div class="${iconClass}" style="${bgStyle}display:flex;align-items:center;justify-content:center;">${icon.html}</div>
+      <div class="${iconClass}" data-exe="${a.process_name || ''}" style="${bgStyle}display:flex;align-items:center;justify-content:center;">${icon.html}</div>
       <div><span class="a-name">${a.category || a.process_name}</span> <span class="a-detail">— ${a.window_title || ''}</span></div>
       <div class="a-dur">${timeDisplay}</div>
       <span class="a-badge ${status === 'on_task' ? 'on-task' : 'drift'}">${status === 'on_task' ? 'on task' : 'drift'}</span>
     </div>`;
   }).join('');
+  hydrateExeIcons(container);
+}
+
+// Swap each row's placeholder/logo for the exe's real icon (backend appicon.rs).
+// Only hits are cached, so an app that gets its path later still picks up its icon.
+const _exeIconCache = new Map();
+function hydrateExeIcons(container) {
+  container.querySelectorAll('.a-icon[data-exe]').forEach(el => {
+    const exe = el.dataset.exe;
+    if (!exe || /^invigil(.exe)?$/i.test(exe)) return; // keep the leaf mark for ourselves
+    const apply = url => {
+      if (!url || !el.isConnected) return;
+      el.classList.remove('no-icon');
+      el.style.background = 'transparent';
+      el.innerHTML = `<img src="${url}" width="22" height="22" alt="" draggable="false">`;
+    };
+    if (_exeIconCache.has(exe)) return apply(_exeIconCache.get(exe));
+    invoke('app_icon', { exe }).then(url => { if (url) _exeIconCache.set(exe, url); apply(url); }).catch(() => {});
+  });
 }
 
 function formatDuration(ms) {
@@ -2432,43 +2461,6 @@ async function setupSettings() {
   } catch (e) {
     console.warn('Could not load settings:', e);
   }
-
-  // Load profiles for deny list
-  try {
-    const profiles = await invoke('get_profiles');
-    const defaultProfile = profiles.find(p => p.id === 'default') || profiles[0];
-    if (defaultProfile) {
-      const denyField = createTagField({
-        boxId: 'denyTagBox', listId: 'denyTagList', inputId: 'denyTagInput', chipsId: 'denyChips',
-        suggestions: ['YouTube', 'Discord — #general', 'Instagram', 'Reddit', 'TikTok', 'iMessage web'],
-        initialTags: defaultProfile.deny_patterns || [],
-      });
-
-      let saveTimeout;
-      const observer = new MutationObserver(() => {
-        clearTimeout(saveTimeout);
-        saveTimeout = setTimeout(() => {
-          invoke('save_profile', {
-            profile: {
-              id: defaultProfile.id,
-              name: defaultProfile.name,
-              allow_patterns: defaultProfile.allow_patterns || [],
-              deny_patterns: denyField.tags,
-            }
-          });
-        }, 500);
-      });
-      const denyList = document.getElementById('denyTagList');
-      if (denyList) observer.observe(denyList, { childList: true, subtree: true });
-    }
-  } catch (e) {
-    console.warn('Could not load profiles:', e);
-    createTagField({
-      boxId: 'denyTagBox', listId: 'denyTagList', inputId: 'denyTagInput', chipsId: 'denyChips',
-      suggestions: ['YouTube', 'Discord — #general', 'Instagram', 'Reddit', 'TikTok', 'iMessage web'],
-      initialTags: ['YouTube', 'Instagram', 'Reddit'],
-    });
-  }
 }
 
 // ─── Backend event listeners ─────────────────────────────────────────
@@ -2477,6 +2469,10 @@ async function setupListeners() {
   // Session tick results from monitoring loop
   await listen('session-tick-result', (event) => {
     const result = event.payload;
+    if (result?.state?.active && !sessionActive) {
+      currentSessionId = result.state.session_id;
+      setSessionUI(true);
+    }
     if (result?.state) {
       applySessionState(result.state);
       elapsedSec = result.state.elapsed_sec;
@@ -2498,8 +2494,15 @@ async function setupListeners() {
     }
   });
 
-  // Wire Leaf Overlay Stop Session Button
+  // Wire Leaf Overlay Stop Session Button (in-app card, and the desktop notch via event)
   const leafStopBtn = document.getElementById('leafStopBtn');
+  await listen('notch-end-session', async () => {
+    const w = window.__TAURI__.window.getCurrentWindow();
+    try { await w.unminimize(); await w.show(); await w.setFocus(); } catch {}
+    if (sessionActive) return leafStopBtn?.click();
+    // Main UI out of sync (e.g. reloaded mid-session): end it directly.
+    try { showSummaryAnimated(await invoke('end_session')); } catch (e) { console.error(e); }
+  });
   if (leafStopBtn) {
     leafStopBtn.addEventListener('click', async () => {
       if (sessionActive) {
@@ -2517,6 +2520,93 @@ async function setupListeners() {
   }
 }
 
+// Desktop notch window: a thin pill at the top of the screen that grows into the Focus bar
+// on hover. The window itself is resized so the collapsed notch never blocks clicks on
+// whatever is underneath (browser tabs, title bars).
+const NOTCH_SMALL = { w: 160, h: 14 };
+const NOTCH_H = 80; // 64px bar + room for the spring overshoot and shadow
+async function setupNotch() {
+  const leaf = document.getElementById('leafLetoutCard');
+  if (!leaf) return;
+  leaf.style.display = 'flex';
+  const { getCurrentWindow, currentMonitor, cursorPosition } = window.__TAURI__.window;
+  const { LogicalSize, LogicalPosition } = window.__TAURI__.dpi;
+  const win = getCurrentWindow();
+
+  // The window never resizes (a resize flashes a stretched old frame). It sits at full bar size,
+  // click-through while collapsed; a cursor poll spots hover over the pill and opens it.
+  const mon = await currentMonitor();
+  const scale = mon?.scaleFactor || 1;
+  const monX = (mon?.position.x || 0) / scale;
+  const monY = (mon?.position.y || 0) / scale;
+  const monW = (mon?.size.width || 1920) / scale;
+  const winW = Math.min(monW - 40, 1300);
+  await win.setSize(new LogicalSize(winW, NOTCH_H));
+  await win.setPosition(new LogicalPosition(Math.round(monX + (monW - winW) / 2), Math.round(monY)));
+  await win.setIgnoreCursorEvents(true);
+
+  // Natural open width of the bar for the current text (it changes as apps change).
+  const measure = () => {
+    leaf.classList.add('notch-measure');
+    const w = Math.ceil(leaf.scrollWidth) + 4;
+    leaf.classList.remove('notch-measure');
+    return Math.min(w, winW - 20);
+  };
+  leaf.style.setProperty('--notch-full-w', measure() + 'px');
+
+  let open = false, closeTimer = null, ignoreTimer = null;
+  const openNotch = () => {
+    clearTimeout(closeTimer); clearTimeout(ignoreTimer);
+    if (open) return;
+    open = true;
+    win.setIgnoreCursorEvents(false);
+    leaf.style.setProperty('--notch-full-w', measure() + 'px');
+    document.body.classList.add('notch-open');
+  };
+  const closeNotch = () => {
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(() => {
+      open = false;
+      document.body.classList.remove('notch-open');
+      ignoreTimer = setTimeout(() => { if (!open) win.setIgnoreCursorEvents(true); }, 350);
+    }, 120);
+  };
+  leaf.addEventListener('mouseenter', openNotch);
+  leaf.addEventListener('mouseleave', closeNotch);
+  document.body.addEventListener('mouseleave', closeNotch);
+
+  // Hover detection while click-through: pill is 120x8 at top-centre (a little slack around it).
+  const cx = monX + monW / 2;
+  setInterval(async () => {
+    if (open || document.hidden) return;
+    try {
+      const p = await cursorPosition();
+      const x = p.x / scale, y = p.y / scale;
+      if (y - monY <= 12 && Math.abs(x - cx) <= 75) openNotch();
+    } catch {}
+  }, 50);
+
+  let lastS = null, lastAt = 0;
+  setInterval(() => {
+    if (!lastS?.active) return;
+    const since = Math.min(5, Math.floor((Date.now() - lastAt) / 1000));
+    updateLeafTime({ ...lastS, elapsed_sec: lastS.elapsed_sec + since });
+  }, 1000);
+  await listen('session-tick-result', (event) => {
+    const s = event.payload?.state;
+    if (!s) return;
+    lastS = s; lastAt = Date.now();
+    updateLeafCard(s);
+    // Text changes (new app, new Xeno line) can widen the bar; grow so End session never clips.
+    if (open) leaf.style.setProperty('--notch-full-w', measure() + 'px');
+  });
+
+  // The main window owns ending a session (summary screen, UI reset), so just ask it.
+  document.getElementById('leafStopBtn')?.addEventListener('click', () => {
+    window.__TAURI__.event.emit('notch-end-session');
+  });
+}
+
 // Listeners for the dedicated drift_overlay window. Kept separate from setupListeners()
 // because the overlay window strips out .page-wrap on load, so applySessionState() would
 // crash on the many DOM elements that no longer exist. Only what the overlay actually
@@ -2527,6 +2617,10 @@ async function setupOverlayListeners() {
   await listen('session-tick-result', (event) => {
     const s = event.payload?.state;
     if (s) currentGoal = s.goal || '';
+    // Safety net: no drift and nothing on screen means this window must not linger invisibly.
+    if (!event.payload?.overlay_active && (!cyberOverlay || cyberOverlay.style.display === 'none')) {
+      try { window.__TAURI__.window.getCurrentWindow().hide(); } catch(e) {}
+    }
   });
 
   await listen('drift-detected', async (event) => {
@@ -2563,6 +2657,7 @@ function countUp(el, from, to, duration, prefix) {
 function showSummaryAnimated(summary) {
   sessionActive = false;
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  lastTickState = null;
 
   const modal = document.getElementById('summaryModalBackdrop');
   const card = modal.querySelector('.summary-card');

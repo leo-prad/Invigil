@@ -48,8 +48,7 @@
   button, .nav-item, .btn, .chip, .cyber-btn, [role="button"] { cursor: pointer; }
   html, body { margin: 0; padding: 0; height: 100%; }
   /* Lock the outer chrome. `.content` is the only scroll container, and
-     a JS-driven translateY on `.page` (see main.js elasticBounce) fakes
-     iOS-style bounce on overscroll so the sidebar never moves. */
+     the sidebar never moves. No overscroll bounce. */
   html, body { overflow: hidden; overscroll-behavior: none; }
   body {
     margin: 0;
@@ -97,12 +96,12 @@
     margin-bottom: 16px;
   }
   .brand .mark {
-    width: 38px; height: 38px; border-radius: 11px;
+    width: 42px; height: 42px; border-radius: 12px;
     background: var(--paper);
     display: grid; place-items: center;
     box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06), 0 4px 10px rgba(0,0,0,0.25);
   }
-  .brand .mark svg { width: 24px; height: 24px; }
+  .brand .mark svg { width: 34px; height: 34px; }
   .brand-name { font-family: var(--font-serif); font-size: 19px; font-style: italic; color: #F2ECD6; }
   .brand-sub { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(231,225,204,0.55); margin-top: 2px; }
   .nav-item {
@@ -266,10 +265,9 @@
     background-clip: padding-box;
     border: 2px solid transparent;
   }
-  .page { will-change: transform; }
   .page {
     display: flex; flex-direction: column; gap: 26px;
-    min-width: 0; min-height: 0; flex: 1; position: relative;
+    min-width: 0; flex: 1 0 auto; position: relative;
   }
   .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
   .eyebrow {
@@ -523,10 +521,12 @@
   .session-row .goal-text.editing {
     cursor: text;
     outline: none;
-    padding: 2px 8px; margin: -2px -8px;
+    padding: 2px 8px; margin: -2px 0 -2px -8px;
     border-radius: 6px;
     background: var(--paper-2);
-    box-shadow: 0 0 0 2px color-mix(in oklab, var(--moss) 45%, transparent);
+    /* inset ring: an outer ring got clipped by the row and read as a stray bracket */
+    box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--moss) 55%, transparent);
+    caret-color: var(--moss-deep);
     white-space: nowrap;
     -webkit-user-select: text; user-select: text;
   }
@@ -639,10 +639,13 @@
 
   .session-now { display: flex; align-items: center; gap: 13px; font-size: 13.5px; color: var(--ink-mid); }
   .session-now .glyph {
-    width: 25px; height: 25px; border-radius: 6px;
-    background: linear-gradient(135deg, #157A2E, #29A644); color: #fff;
-    display: grid; place-items: center; font-size: 11px; font-weight: 600;
-    box-shadow: inset 0 -4px 8px rgba(0,0,0,0.18); flex-shrink: 0;
+    width: 25px; height: 25px; border-radius: 6px; overflow: hidden;
+    color: #fff; display: grid; place-items: center; font-size: 11px; font-weight: 600;
+    flex-shrink: 0;
+  }
+  .session-now .glyph .no-icon {
+    background: linear-gradient(135deg, #157A2E, #29A644);
+    box-shadow: inset 0 -4px 8px rgba(0,0,0,0.18);
   }
   .session-now .path { color: var(--ink); }
   .session-now .path .muted { color: var(--ink-muted); }
@@ -657,7 +660,7 @@
   .session-timeline-head { display: flex; align-items: baseline; justify-content: space-between; }
   .session-timeline-head .h { font-family: var(--font-serif); font-style: italic; font-size: 15px; color: var(--ink); }
   .session-timeline-head .meta { font-size: 11px; color: var(--ink-muted); }
-  .session-timeline-viz { position: relative; flex: 1; min-height: 0; }
+  .session-timeline-viz { position: relative; flex: 1 0 auto; height: 120px; }
   .session-timeline-viz svg { position: absolute; inset: 0; width: 100%; height: 100%; }
   .session-dot {
     position: absolute; width: 8px; height: 8px; border-radius: 50%;
@@ -1332,7 +1335,7 @@
     background: #C5714A;
     color: #FFF;
     border: none;
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 6px 12px;
     font-size: 12px;
     font-weight: 600;
@@ -1509,8 +1512,9 @@
   .bounty-badge.diff-hard { background: color-mix(in oklab, var(--forest) 14%, var(--paper-2)); color: var(--forest); border-color: color-mix(in oklab, var(--forest) 30%, transparent); }
 
   .bounty-title {
-    font-family: Charter, 'Iowan Old Style', Georgia, serif;
-    font-size: 30px; line-height: 1.16; color: var(--forest); font-weight: 600;
+    font-family: var(--font-serif);
+    font-size: 28px; line-height: 1.16; color: var(--forest); font-weight: 400;
+    letter-spacing: -0.01em;
   }
   .bounty-desc { font-size: 17px; line-height: 1.55; color: var(--ink-mid); flex: 1; }
 
@@ -1541,7 +1545,7 @@
   .bounty-btn {
     align-self: stretch;
     padding: 14px 16px; border-radius: 12px; border: 1px solid transparent;
-    font-size: 15px; font-weight: 600; letter-spacing: 0.02em;
+    font-family: var(--font-sans); font-size: 14.5px; font-weight: 600; letter-spacing: 0.01em;
     cursor: pointer; transition: background 0.15s ease, transform 0.05s ease;
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   }
@@ -1943,4 +1947,68 @@
   @media (max-width: 600px) {
     .ai-compare { grid-template-columns: 1fr; }
     .ai-onboard-card { max-width: 92vw; }
+  }
+
+  /* ================= DESKTOP NOTCH (notch window, index.html#notch) =================
+     The card IS the notch: collapsed it's a 120x8 pill hanging from the top edge; hovering
+     morphs its width/height/radius into the full Focus bar (springy overshoot), then the
+     details fade in. Closing fades details first, then the shape shrinks back. main.js
+     setupNotch() sizes the window around it so the collapsed pill never blocks clicks. */
+  body.notch-mode { margin: 0; height: 100vh; cursor: default; }
+  /* The card is always laid out at full size; only clip-path animates (no layout per frame),
+     so the pill-to-bar morph runs at the display's full refresh rate. */
+  body.notch-mode .leaf-letout-card,
+  body.notch-mode .leaf-letout-card:hover {
+    white-space: nowrap;
+    top: 0; bottom: auto;
+    transform: translateX(-50%);
+    width: var(--notch-full-w, 760px); height: 64px; max-width: none;
+    padding: 0 22px; overflow: hidden;
+    border: none;
+    /* Card fill = stroke colour; ::before is the dark body clipped 1px tighter, so the stroke
+       follows the curved corners in both the pill and the open bar. */
+    background: rgba(181, 200, 155, 0.28);
+    box-shadow: none;
+    --cx: calc((var(--notch-full-w, 760px) - 120px) / 2);
+    clip-path: inset(0 var(--cx) 56px var(--cx) round 0 0 8px 8px);
+    will-change: clip-path;
+    transition: clip-path 0.26s cubic-bezier(0.5, 0, 0.2, 1) 0.1s;
+  }
+  body.notch-mode .leaf-letout-card::before {
+    content: ''; position: absolute; inset: 0; z-index: 0;
+    background: rgb(20, 26, 20);
+    clip-path: inset(0 calc(var(--cx) + 1px) 57px calc(var(--cx) + 1px) round 0 0 7px 7px);
+    will-change: clip-path;
+    transition: clip-path 0.26s cubic-bezier(0.5, 0, 0.2, 1) 0.1s;
+  }
+  body.notch-mode.notch-open .leaf-letout-card {
+    clip-path: inset(0 0 0 0 round 0 0 14px 14px);
+    transition: clip-path 0.38s cubic-bezier(0.3, 1.2, 0.4, 1);
+  }
+  body.notch-mode.notch-open .leaf-letout-card::before {
+    clip-path: inset(0 1px 1px 1px round 0 0 13px 13px);
+    transition: clip-path 0.38s cubic-bezier(0.3, 1.2, 0.4, 1);
+  }
+  body.notch-mode #leafRemainingTime { overflow: hidden; display: inline-block; vertical-align: bottom; }
+  /* Every child (End session included) blurs/fades out before the shape closes, and back in
+     once it has opened. */
+  body.notch-mode .leaf-letout-card > * {
+    position: relative; z-index: 1;
+    opacity: 0; filter: blur(3px); transform: translateY(-4px) scale(0.97);
+    transition: opacity 0.1s ease, filter 0.1s ease, transform 0.1s ease;
+  }
+  body.notch-mode.notch-open .leaf-letout-card > * {
+    opacity: 1; filter: none; transform: none;
+    transition: opacity 0.2s ease 0.1s, filter 0.2s ease 0.1s,
+                transform 0.3s cubic-bezier(0.34, 1.3, 0.42, 1) 0.08s;
+  }
+  /* overflow visible: the button's hover scale was clipped by the wrapper's edges. */
+  body.notch-mode .leaf-card-action { max-width: none; flex-shrink: 0; margin-left: 8px; overflow: visible; }
+  body.notch-mode .leaf-card-handle { align-self: center; padding-top: 0; }
+  /* Measuring pass: lay the card out at its natural open width, no animation. */
+  body.notch-mode .leaf-letout-card.notch-measure {
+    width: max-content !important; height: 64px !important; transition: none !important;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    body.notch-mode .leaf-letout-card, body.notch-mode .leaf-letout-card > * { transition-duration: 0.01s !important; transition-delay: 0s !important; }
   }

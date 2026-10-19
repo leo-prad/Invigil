@@ -590,6 +590,13 @@ fn build_prompt(goal: &str, description: &str, app_name: &str, window_title: &st
            \"reading\" → off_task).\n\
          - Off_task if watching a video, music, social media, chat, or news that the title \
            doesn't clearly tie to the task.\n\
+         - Off_task if the app is an AI chat assistant (Claude, ChatGPT, Copilot, Gemini, \
+           Perplexity) and the window title does not itself contain the task's subject. \
+           These apps almost never show conversation content in their title bar — a bare \
+           title like \"Claude\" or \"ChatGPT\" carries NO evidence either way, and \"it's an \
+           AI assistant so it could be helping with the task\" is exactly the kind of benefit \
+           of the doubt you must NOT give (task = \"math\", window = App: Claude, Title: \
+           \"Claude\" → off_task; no subject is visible, so there is nothing to match).\n\
          - On_task ONLY when the title/content names the actual subject, tool, file, \
            chapter, teacher, or artifact from the task description.\n\
          - When uncertain, choose off_task. Do NOT give benefit of the doubt.\n\n\

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Invigil",
-  "version": "0.1.0",
+  "version": "0.7.0",
   "identifier": "com.invigil.app",
   "build": {
     "frontendDist": "../src"
@@ -26,20 +26,34 @@
         "title": "Invigil Alert",
         "url": "index.html#overlay-drift",
         "fullscreen": false,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "shadow": false,
         "transparent": true,
         "alwaysOnTop": true,
         "decorations": false,
         "visible": false,
         "skipTaskbar": true
+      },
+      {
+        "label": "notch",
+        "title": "Invigil Notch",
+        "url": "index.html#notch",
+        "width": 160,
+        "height": 14,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "decorations": false,
+        "visible": false,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "focus": false
       }
     ],
     "security": {
       "csp": null
-    },
-    "trayIcon": {
-      "iconPath": "icons/32x32.png",
-      "iconAsTemplate": true,
-      "tooltip": "Invigil — Focus Daemon"
     }
   },
   "bundle": {

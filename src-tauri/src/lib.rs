@@ -1,4 +1,5 @@
 mod ai_setup;
+mod appicon;
 mod bounties;
 mod classifier;
 mod db;
@@ -13,6 +14,7 @@ use session::SessionManager;
 use std::sync::Arc;
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize,
+    menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     WindowEvent,
 };
@@ -94,6 +96,10 @@ fn start_session(
 
     *state.tick_handle.lock() = Some(handle);
 
+    if let Some(notch) = app.get_webview_window("notch") {
+        let _ = notch.show();
+    }
+
     Ok(session_state)
 }
 
@@ -104,6 +110,9 @@ fn end_session(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<sess
 
     if let Some(drift_win) = app.get_webview_window("drift_overlay") {
         let _ = drift_win.hide();
+    }
+    if let Some(notch) = app.get_webview_window("notch") {
+        let _ = notch.hide();
     }
 
     let summary = state.session_mgr.stop();
@@ -242,6 +251,11 @@ struct RecentTasks {
 fn get_recent_tasks(state: tauri::State<'_, AppState>) -> Result<RecentTasks, String> {
     let (goals, descriptions) = state.db.get_recent_task_suggestions(3).map_err(|e| e.to_string())?;
     Ok(RecentTasks { goals, descriptions })
+}
+
+#[tauri::command]
+async fn app_icon(exe: String) -> Option<String> {
+    appicon::icon(&exe)
 }
 
 // --- Profile commands ---
@@ -611,6 +625,7 @@ pub fn run() {
             rename_session,
             get_top_tools,
             get_recent_tasks,
+            app_icon,
             // Dashboard
             get_dashboard_data,
             get_day_stats,
@@ -664,11 +679,28 @@ pub fn run() {
                 let _ = llm::warm_model();
             });
 
-            // Build system tray icon with click-to-restore
+            // The one tray icon (none in tauri.conf.json, or there'd be two): left-click restores,
+            // right-click menu has Open and Quit.
             let app_handle = app.handle().clone();
+            let open_i = MenuItem::with_id(app, "open", "Open Invigil", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Quit Invigil", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open_i, &quit_i])?;
             TrayIconBuilder::new()
-                .tooltip("Invigil — Focus Daemon")
+                .tooltip("Invigil")
                 .icon(app.default_window_icon().cloned().unwrap())
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.unminimize();
+                            let _ = win.set_focus();
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
                 .on_tray_icon_event(move |_tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,

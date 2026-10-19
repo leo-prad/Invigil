@@ -20,14 +20,6 @@ pub fn classify_tier0(window: &WindowInfo, profile: &Profile) -> (Classification
         return (Classification::Ambiguous, String::new());
     }
 
-    // Check deny list first (higher priority)
-    for pattern in &profile.deny_patterns {
-        let pat = pattern.to_lowercase();
-        if matches_pattern(&title_lower, &process_lower, &pat) {
-            return (Classification::OffTask, pattern.clone());
-        }
-    }
-
     // Check allow list
     for pattern in &profile.allow_patterns {
         let pat = pattern.to_lowercase();
@@ -46,22 +38,9 @@ pub fn classify_tier0(window: &WindowInfo, profile: &Profile) -> (Classification
         }
     }
 
-    // Utility apps that are almost never distractions on their own — opening File Explorer
-    // to grab a document, checking Task Manager, snipping a screenshot, jotting in Notepad,
-    // punching numbers into Calculator, tweaking a Windows Setting. These get a blanket
-    // OnTask so a brief visit doesn't count as drift. If the user genuinely idles in one
-    // of them for a whole session, they can still add it to their deny list.
-    let utility_apps = [
-        "explorer.exe", "taskmgr", "snippingtool", "screenclippinghost",
-        "notepad.exe", "wordpad", "calc.exe", "calculator",
-        "systemsettings", "control.exe", "mmc.exe",
-        "shellexperiencehost", "startmenuexperiencehost",
-    ];
-    for app in &utility_apps {
-        if process_lower.contains(app) {
-            return (Classification::OnTask, format!("utility:{}", app));
-        }
-    }
+    // No blanket allow for utility apps (Explorer, Snipping Tool, Notepad...): they fall
+    // through to Ambiguous and get judged against the goal. The 10s drift-onset grace in
+    // session.rs already covers quick visits.
 
     // Known always-play apps (system-level denylist)
     let system_play = [
@@ -95,6 +74,31 @@ pub fn classify_tier0(window: &WindowInfo, profile: &Profile) -> (Classification
 
     // Default: ambiguous — let Tier 1 handle it
     (Classification::Ambiguous, String::new())
+}
+
+/// Utility apps you pass through on the way to work (finding a file, taking a snip).
+/// session.rs keeps them on task while the window keeps changing; see UTILITY_STILL_SEC.
+pub fn is_utility_app(window: &WindowInfo) -> bool {
+    let p = window.process_name.to_lowercase();
+    [
+        "explorer.exe", "snippingtool", "screenclippinghost", "taskmgr", "calc.exe",
+        "calculatorapp", "systemsettings", "shellexperiencehost", "startmenuexperiencehost",
+        "searchhost",
+    ]
+    .iter()
+    .any(|a| p.contains(a))
+}
+
+/// AI chat assistants whose desktop window title never shows conversation content (just the
+/// app name, e.g. "Claude" or "ChatGPT"). Tier 1's small local model tends to give these the
+/// benefit of the doubt ("it's an AI assistant, could be helping with the task") even though
+/// there is literally no title content to judge — so these are routed straight to the
+/// deterministic keyword heuristic instead of the LLM, skipping the unreliable judgment call.
+pub fn is_opaque_ai_assistant(window: &WindowInfo) -> bool {
+    let process_lower = window.process_name.to_lowercase();
+    let title_lower = window.title.to_lowercase();
+    let opaque_ai_apps = ["claude", "chatgpt", "copilot", "gemini", "perplexity"];
+    opaque_ai_apps.iter().any(|app| process_lower.contains(app) || title_lower.contains(app))
 }
 
 /// Simple pattern matching: checks if the pattern substring appears in
