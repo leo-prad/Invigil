@@ -428,14 +428,20 @@ fn submit_work_justification(
     }
 
     // Snapshot the window the user is defending — the same one that triggered the drift.
+    // The overlay itself has focus while the user types, so judge the window that drifted
+    // (tracked by the session, which skips the overlay) instead of the active one.
     let window = monitor::get_active_window();
-    let app_name = monitor::extract_app_name(&window);
+    let (app_name, title) = if window.title.starts_with("Invigil") {
+        (session_state.current_app.clone(), state.session_mgr.last_window_title())
+    } else {
+        (monitor::extract_app_name(&window), window.title.clone())
+    };
 
     let verdict = llm::validate_work_justification(
         &session_state.goal,
         &session_state.description,
         &app_name,
-        &window.title,
+        &title,
         &reason_trimmed,
     );
 

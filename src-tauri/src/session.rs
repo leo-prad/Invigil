@@ -721,6 +721,11 @@ impl SessionManager {
         *self.last_status.lock() = new_status.to_string();
     }
 
+    /// Title of the last real (non-overlay) window, i.e. the one that drifted.
+    pub fn last_window_title(&self) -> String {
+        self.last_window_title.lock().clone()
+    }
+
     /// Attach a free-text justification to the current interval as an on_task correction.
     /// Called from the "This is actually work" flow after the user types a reason.
     pub fn record_work_justification(&self, reason: &str) {

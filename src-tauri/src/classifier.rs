@@ -60,6 +60,7 @@ pub fn classify_tier0(window: &WindowInfo, profile: &Profile) -> (Classification
     let dual_use = [
         "chrome", "firefox", "edge", "brave", "safari", "discord", "slack",
         "overleaf", "desmos", "notion", "obsidian",
+        "drawboard", "onenote", "goodnotes", "xodo", "acrobat",
         "latex", "texstudio", "texmaker", "zotero", "antigravity",
         "code", "visual studio", "cursor", "pycharm", "intellij", "sublime",
         "chatgpt", "claude", "github", "stack overflow",
