@@ -587,6 +587,7 @@ fn build_prompt(goal: &str, description: &str, app_name: &str, window_title: &st
            AI assistant so it could be helping with the task\" is exactly the kind of benefit \
            of the doubt you must NOT give (task = \"math\", window = App: Claude, Title: \
            \"Claude\" → off_task; no subject is visible, so there is nothing to match).\n\
+         - On_task if the app is a note-taking, handwriting, PDF, or document app            (Drawboard PDF, OneNote, GoodNotes, Xodo, Acrobat, Word, Notepad) and the task is            homework, notes, writing, or studying. Students write and read their work there,            and file names like \"Notebook Paper\" or \"Untitled\" are normal            (task = \"Comp Arch HW #4\", window = Drawboard PDF \"Notebook Paper\" → on_task).
          - On_task ONLY when the title/content names the actual subject, tool, file, \
            chapter, teacher, or artifact from the task description.\n\
          - When uncertain, choose off_task. Do NOT give benefit of the doubt.\n\n\
