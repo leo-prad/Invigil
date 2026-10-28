@@ -2012,3 +2012,13 @@
   @media (prefers-reduced-motion: reduce) {
     body.notch-mode .leaf-letout-card, body.notch-mode .leaf-letout-card > * { transition-duration: 0.01s !important; transition-delay: 0s !important; }
   }
+
+/* Session completion uses the bounty palette and pieces, fired from both desktop edges. */
+body.celebration-mode { background: transparent !important; pointer-events: none; }
+.confetti-sides .confetti-piece { animation-name: confetti-side-burst; animation-timing-function: cubic-bezier(.15,.55,.45,1); }
+@keyframes confetti-side-burst {
+  0% { transform: translate3d(0,0,0) rotate(0deg); opacity: 1; }
+  30% { transform: translate3d(calc(var(--dx) * .55),-36vh,0) rotate(calc(var(--rot) * .3)); opacity: 1; }
+  85% { opacity: 1; }
+  100% { transform: translate3d(var(--dx),65vh,0) rotate(var(--rot)); opacity: 0; }
+}

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Invigil",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "identifier": "com.invigil.app",
   "build": {
     "frontendDist": "../src"
@@ -50,6 +50,22 @@
         "resizable": false,
         "shadow": false,
         "focus": false
+      },
+      {
+        "label": "celebration",
+        "title": "Invigil Celebration",
+        "url": "index.html#celebration",
+        "width": 800,
+        "height": 600,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "decorations": false,
+        "visible": false,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "focus": false,
+        "focusable": false
       }
     ],
     "security": {

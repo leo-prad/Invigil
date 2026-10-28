@@ -11,7 +11,9 @@ mod session;
 use db::Database;
 use parking_lot::Mutex;
 use session::SessionManager;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+
+static SESSION_GENERATION: AtomicU64 = AtomicU64::new(0);
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize,
     menu::{Menu, MenuItem},
@@ -41,6 +43,7 @@ fn start_session(
     profile_id: Option<String>,
     duration_min: Option<i64>,
 ) -> Result<session::SessionState, String> {
+    let generation = SESSION_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let session_state = state.session_mgr.start(goal, description, profile_id, duration_min);
 
     // Start the background monitoring tick loop (every 5 seconds)
@@ -49,15 +52,16 @@ fn start_session(
     let app_clone = app.clone();
 
     let handle = std::thread::spawn(move || {
-        while *running.lock() {
+        while SESSION_GENERATION.load(Ordering::SeqCst) == generation && *running.lock() {
             std::thread::sleep(std::time::Duration::from_secs(5));
-            if !*running.lock() {
+            if SESSION_GENERATION.load(Ordering::SeqCst) != generation || !*running.lock() {
                 break;
             }
             
             // Execute tick on background thread to keep main UI loop smooth
             let app_state = app_clone.state::<AppState>();
             if let Some(result) = app_state.session_mgr.tick() {
+                if SESSION_GENERATION.load(Ordering::SeqCst) != generation { break; }
                 let _ = app_clone.emit("session-tick-result", &result);
 
                 // Skip when the user is already parked on the overlay itself — the window is
@@ -100,11 +104,19 @@ fn start_session(
         let _ = notch.show();
     }
 
+    if let Some(win) = app.get_webview_window("celebration") {
+        let _ = win.hide();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
+
     Ok(session_state)
 }
 
 #[tauri::command]
 fn end_session(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<session::SessionSummary, String> {
+    let generation = SESSION_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     *state.tick_running.lock() = false;
     let _ = state.tick_handle.lock().take();
 
@@ -123,7 +135,42 @@ fn end_session(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<sess
     bounties::ensure_today_pool(&state.db);
     bounties::refresh_progress(&state.db, &today);
 
+    celebrate_session(&app, generation);
     Ok(summary)
+}
+
+// A transparent, click-through native window puts the bounty particles above other apps.
+fn celebrate_session(app: &AppHandle, generation: u64) {
+    if let Some(win) = app.get_webview_window("celebration") {
+        if let Ok(monitors) = win.available_monitors() {
+            let left = monitors.iter().map(|m| m.position().x).min().unwrap_or(0);
+            let top = monitors.iter().map(|m| m.position().y).min().unwrap_or(0);
+            let right = monitors.iter().map(|m| m.position().x + m.size().width as i32).max().unwrap_or(800);
+            let bottom = monitors.iter().map(|m| m.position().y + m.size().height as i32).max().unwrap_or(600);
+            let _ = win.set_position(PhysicalPosition::new(left, top));
+            let _ = win.set_size(PhysicalSize::new((right - left) as u32, (bottom - top) as u32));
+        }
+        let _ = win.set_ignore_cursor_events(true);
+        let _ = win.set_always_on_top(true);
+        let _ = win.show();
+        let _ = win.emit("session-celebration", ());
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // Let the bursts appear over the current app before revealing the score.
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        if SESSION_GENERATION.load(Ordering::SeqCst) != generation { return; }
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.show();
+            let _ = main.unminimize();
+            let _ = main.set_focus();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(3900));
+        if SESSION_GENERATION.load(Ordering::SeqCst) != generation { return; }
+        if let Some(win) = app.get_webview_window("celebration") {
+            let _ = win.hide();
+        }
+    });
 }
 
 #[tauri::command]

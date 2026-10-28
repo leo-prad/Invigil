@@ -47,6 +47,7 @@ pub fn get_active_window() -> WindowInfo {
             if let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
                 let mut path_buf = [0u16; 1024];
                 let path_len = GetModuleFileNameExW(handle, None, &mut path_buf);
+                let _ = windows::Win32::Foundation::CloseHandle(handle);
                 if path_len > 0 {
                     let full = OsString::from_wide(&path_buf[..path_len as usize])
                         .to_string_lossy()
@@ -201,4 +202,138 @@ pub fn get_idle_seconds() -> u64 {
 #[cfg(not(target_os = "windows"))]
 pub fn get_idle_seconds() -> u64 {
     0
+}
+
+/// A small foreground screenshot, encoded without ever creating a disk file.
+#[cfg(windows)]
+pub fn capture_foreground() -> Option<String> {
+    use base64::Engine;
+    use windows::Win32::{Foundation::RECT, Graphics::Gdi::*, UI::WindowsAndMessaging::*};
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        let mut rect = RECT::default();
+        GetWindowRect(hwnd, &mut rect).ok()?;
+        let (sw, sh) = (rect.right - rect.left, rect.bottom - rect.top);
+        if sw <= 0 || sh <= 0 { return None; }
+        let scale = (1280.0 / sw as f64).min(900.0 / sh as f64).min(1.0);
+        let (w,h) = ((sw as f64 * scale) as i32, (sh as f64 * scale) as i32);
+        let screen = GetDC(None);
+        if screen.is_invalid() { return None; }
+        let dc = CreateCompatibleDC(screen);
+        let bitmap = CreateCompatibleBitmap(screen, w, h);
+        if dc.is_invalid() || bitmap.is_invalid() {
+            if !bitmap.is_invalid() { let _ = DeleteObject(bitmap); }
+            if !dc.is_invalid() { let _ = DeleteDC(dc); }
+            ReleaseDC(None, screen);
+            return None;
+        }
+        let old = SelectObject(dc, bitmap);
+        let copied = StretchBlt(dc, 0, 0, w, h, screen, rect.left, rect.top, sw, sh, SRCCOPY).as_bool();
+        SelectObject(dc, old);
+        let mut pixels = vec![0u8; w as usize * h as usize * 4];
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = w;
+        info.bmiHeader.biHeight = -h;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        let rows = if copied { GetDIBits(screen, bitmap, 0, h as u32, Some(pixels.as_mut_ptr().cast()), &mut info, DIB_RGB_COLORS) } else { 0 };
+        let _ = DeleteObject(bitmap);
+        let _ = DeleteDC(dc);
+        ReleaseDC(None, screen);
+        if rows != h { return None; }
+        for px in pixels.chunks_exact_mut(4) { px.swap(0,2); px[3] = 255; }
+        let mut png_bytes = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png_bytes, w as u32, h as u32);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.write_header().ok()?.write_image_data(&pixels).ok()?;
+        }
+        Some(base64::engine::general_purpose::STANDARD.encode(png_bytes))
+    }
+}
+#[cfg(not(windows))]
+pub fn capture_foreground() -> Option<String> { None }
+
+/// A single bounded worker protects the session thread from hung accessibility providers.
+/// Text is transient classification input, never returned to history or the frontend.
+#[cfg(windows)]
+pub fn foreground_context() -> String {
+    use std::sync::{mpsc, OnceLock};
+    type Request = (isize, mpsc::SyncSender<String>);
+    static WORKER: OnceLock<mpsc::SyncSender<Request>> = OnceLock::new();
+    let worker = WORKER.get_or_init(|| {
+        let (tx, rx) = mpsc::sync_channel::<Request>(0);
+        std::thread::spawn(move || {
+            use windows::Win32::{System::Com::*, UI::Accessibility::*};
+            unsafe {
+                if CoInitializeEx(None, COINIT_MULTITHREADED).is_err() { return; }
+                while let Ok((hwnd, reply)) = rx.recv() {
+                    let text = (|| -> windows::core::Result<String> {
+                        let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
+                        let root = automation.ElementFromHandle(windows::Win32::Foundation::HWND(hwnd as *mut _))?;
+                        let walker = automation.ControlViewWalker()?;
+                        let mut stack = vec![(root, 0usize)];
+                        let mut text = String::new();
+                        let start = std::time::Instant::now();
+                        let mut visited = 0;
+                        while let Some((node, depth)) = stack.pop() {
+                            if visited >= 180 || text.len() >= 6000 || start.elapsed().as_millis() > 250 { break; }
+                            visited += 1;
+                            // Queue siblings before skipping hidden/password nodes, otherwise one
+                            // hidden child truncates the remaining visible controls in its parent.
+                            // Never follow root siblings, which belong to other app windows.
+                            if depth > 0 {
+                                if let Ok(next) = walker.GetNextSiblingElement(&node) { stack.push((next, depth)); }
+                            }
+                            if node.CurrentIsOffscreen().map(|v| v.as_bool()).unwrap_or(true)
+                                || node.CurrentIsPassword().map(|v| v.as_bool()).unwrap_or(true) { continue; }
+                            if let Ok(name) = node.CurrentName() {
+                                let name = name.to_string();
+                                if !name.trim().is_empty() {
+                                    text.extend(name.chars().take(300)); text.push('\n');
+                                }
+                            }
+                            if depth < 12 {
+                                if let Ok(child) = walker.GetFirstChildElement(&node) { stack.push((child, depth + 1)); }
+                            }
+                        }
+                        Ok(text)
+                    })().unwrap_or_default();
+                    let _ = reply.send(text);
+                }
+                CoUninitialize();
+            }
+        });
+        tx
+    });
+    let hwnd = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+    let (tx, rx) = mpsc::sync_channel(1);
+    if worker.try_send((hwnd.0 as isize, tx)).is_err() { return String::new(); }
+    rx.recv_timeout(std::time::Duration::from_millis(400)).unwrap_or_default()
+}
+#[cfg(not(windows))]
+pub fn foreground_context() -> String { String::new() }
+
+#[cfg(all(test, windows))]
+mod observation_tests {
+    #[test]
+    fn foreground_capture_is_an_in_memory_png() {
+        use base64::Engine;
+        let image = super::capture_foreground().expect("visible foreground window");
+        let bytes = base64::engine::general_purpose::STANDARD.decode(image).unwrap();
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+        let reader = decoder.read_info().unwrap();
+        assert!(reader.info().width <= 1280 && reader.info().height <= 900);
+    }
+    #[test]
+    #[ignore = "requires local Ollama vision model and a visible desktop"]
+    fn local_vision_accepts_foreground_capture() {
+        let image = super::capture_foreground().expect("foreground screenshot");
+        let window = super::get_active_window();
+        let answer = crate::llm::classify_observation("Review photosynthesis", "I am studying the chloroplast reactions for my biology exam", &window.process_name, &window.title, &super::foreground_context(), Some(&image));
+        assert!(answer.is_some(), "local model must accept PNG image and return a verdict");
+    }
 }
