@@ -44,6 +44,12 @@ const state = { mode: 'overall', start: null, end: null };
 // ─── Init ────────────────────────────────────────────────────────────
 
 async function init() {
+  if (window.location.hash === '#celebration') {
+    document.body.classList.add('overlay-mode', 'celebration-mode');
+    document.body.replaceChildren();
+    await listen('session-celebration', () => burstConfetti(true));
+    return;
+  }
   if (window.location.hash === '#notch') {
     document.body.classList.add('overlay-mode', 'notch-mode');
     document.querySelector('.page-wrap')?.remove();
@@ -1144,9 +1150,9 @@ function attachTilt(card) {
   card.addEventListener('mouseleave', onLeave);
 }
 
-function burstConfetti() {
+function burstConfetti(fromSides = false) {
   const layer = document.createElement('div');
-  layer.className = 'confetti-layer';
+  layer.className = 'confetti-layer' + (fromSides ? ' confetti-sides' : '');
   document.body.appendChild(layer);
   const colors = ['#c47f4a', '#c9a34a', '#5a7a44', '#3a4d33', '#a8b89a', '#8b6bb0'];
   const count = 90;
@@ -1154,14 +1160,16 @@ function burstConfetti() {
   for (let i = 0; i < count; i++) {
     const p = document.createElement('div');
     p.className = 'confetti-piece';
-    const startX = Math.random() * vw;
-    const dx = (Math.random() - 0.5) * 260;
+    const left = i % 2 === 0;
+    const startX = fromSides ? (left ? -12 : vw + 12) : Math.random() * vw;
+    const dx = fromSides ? (left ? 1 : -1) * vw * (0.2 + Math.random() * 0.45) : (Math.random() - 0.5) * 260;
     const rot = (Math.random() * 720 + 360) * (Math.random() < 0.5 ? -1 : 1);
     const dur = 2.4 + Math.random() * 1.6;
     const delay = Math.random() * 0.35;
     const w = 6 + Math.random() * 8;
     const h = 10 + Math.random() * 8;
     p.style.left = startX + 'px';
+    if (fromSides) p.style.top = (45 + Math.random() * 35) + 'vh';
     p.style.width = w + 'px';
     p.style.height = h + 'px';
     p.style.background = colors[i % colors.length];
@@ -1319,7 +1327,6 @@ let currentSessionId = null;
 const startModal = document.getElementById('startModalBackdrop');
 const summaryModal = document.getElementById('summaryModalBackdrop');
 const startSessionBtn = document.getElementById('startSessionBtn');
-const demoDriftBtn = document.getElementById('demoDriftBtn');
 
 function setSessionUI(active) {
   sessionActive = active;
@@ -1327,7 +1334,6 @@ function setSessionUI(active) {
   if (active) {
     startSessionBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> End session`;
     startSessionBtn.classList.add('danger');
-    demoDriftBtn.style.display = 'inline-flex';
     // Now bar stays hidden: the user doesn't want the current app shown on the page.
     document.getElementById('sessionActivityCard').style.display = '';
     if (leafCard) leafCard.style.display = 'none'; // the desktop notch replaces the in-app leaf bar
@@ -1336,7 +1342,6 @@ function setSessionUI(active) {
   } else {
     startSessionBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2 3 14h6l-1 8 10-12h-6l1-8Z"/></svg> Start session`;
     startSessionBtn.classList.remove('danger');
-    demoDriftBtn.style.display = 'none';
     document.getElementById('sessionNowBar').style.display = 'none';
     document.getElementById('sessionActivityCard').style.display = 'none';
     if (leafCard) leafCard.style.display = 'none';
@@ -1516,17 +1521,16 @@ document.getElementById('modalStartBtn').addEventListener('click', async () => {
 
   const modalStartBtn = document.getElementById('modalStartBtn');
   modalStartBtn.disabled = true;
-  modalStartBtn.innerHTML = `<span>Validating with AI…</span>`;
+  modalStartBtn.innerHTML = `<span>Checking your task…</span>`;
 
-  // If the local model is loading cold (first run after Ollama start), that can
-  // take 20-30s. After 4s of silence, tell the user why so it doesn't feel stuck.
+  // Validation can take longer whenever Ollama reloads its model, even on later sessions.
   const warmingHint = setTimeout(() => {
     if (modalStartBtn.disabled) {
-      modalStartBtn.innerHTML = `<span>Warming up local model (first run only)…</span>`;
+      modalStartBtn.innerHTML = `<span>Still checking your task with the local model…</span>`;
     }
   }, 4000);
 
-  // Validate task goal and description using Gemma AI
+  // Validate the task goal and description with the configured local model
   try {
     const reason = await invoke('validate_goal', { goal, description });
     clearTimeout(warmingHint);
@@ -1746,7 +1750,7 @@ function hideCyberOverlay() {
   invoke('hide_drift_overlay').catch(() => {});
 }
 
-demoDriftBtn.addEventListener('click', () => showCyberOverlay('Discord', '#general', 47, 'Calc HW'));
+
 
 // "This is actually work" runs a two-step flow: click reveals a textarea; submit sends
 // the reason through the local AI. The backend decides — if the AI calls it BS, we keep
@@ -2497,8 +2501,6 @@ async function setupListeners() {
   // Wire Leaf Overlay Stop Session Button (in-app card, and the desktop notch via event)
   const leafStopBtn = document.getElementById('leafStopBtn');
   await listen('notch-end-session', async () => {
-    const w = window.__TAURI__.window.getCurrentWindow();
-    try { await w.unminimize(); await w.show(); await w.setFocus(); } catch {}
     if (sessionActive) return leafStopBtn?.click();
     // Main UI out of sync (e.g. reloaded mid-session): end it directly.
     try { showSummaryAnimated(await invoke('end_session')); } catch (e) { console.error(e); }
@@ -3148,7 +3150,7 @@ const aiOnboard = {
 
 init().then(() => {
   // Only run onboarding for the main window, never the overlays.
-  if (window.location.hash === '#overlay-leaf' || window.location.hash === '#overlay-drift') return;
+  if (window.location.hash) return;
   aiOnboard.init();
   aiOnboard.checkFirstRun();
 });

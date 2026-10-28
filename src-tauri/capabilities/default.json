@@ -1,11 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/capability",
   "identifier": "default",
-  "description": "Capability for the main and drift-overlay windows",
+  "description": "Capability for Invigil main, drift, notch, and celebration windows",
   "windows": [
     "main",
     "drift_overlay",
-    "notch"
+    "notch",
+    "celebration"
   ],
   "permissions": [
     "core:default",

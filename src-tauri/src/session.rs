@@ -6,7 +6,8 @@ use chrono::Utc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::time::Instant;
 use uuid::Uuid;
 
 // Seconds to suppress the drift overlay after the user dismisses it, so long as they
@@ -143,8 +144,38 @@ pub struct PointBreakdown {
 
 // ─── Session manager ─────────────────────────────────────────────────
 
+fn account_final_gap(state: &mut SessionState, gap: i64) {
+    state.elapsed_sec += gap;
+    if state.is_idle { state.idle_sec += gap; }
+    if state.current_status == "off_task" {
+        state.off_task_sec += gap;
+    } else {
+        state.on_task_sec += gap;
+        state.current_streak_sec += gap;
+        state.deep_focus_sec = state.deep_focus_sec.max(state.current_streak_sec);
+    }
+}
+
+#[derive(Clone)]
+struct VisualObservation {
+    session_id: String,
+    process: String,
+    title: String,
+    completed_at: Instant,
+    verdict: Option<llm::LlmVerdict>,
+}
+
+fn matching_visual_verdict(observation: &VisualObservation, session_id: &str, process: &str, title: &str) -> Option<llm::LlmVerdict> {
+    if observation.session_id == session_id && observation.process == process && observation.title == title
+        && observation.completed_at.elapsed().as_secs() <= 30 {
+        observation.verdict.clone()
+    } else { None }
+}
+
 pub struct SessionManager {
     state: Arc<Mutex<SessionState>>,
+    visual_busy: Arc<AtomicBool>,
+    visual_result: Arc<Mutex<Option<VisualObservation>>>,
     db: Database,
     grace_period_sec: i64,
     idle_timeout_sec: i64,
@@ -180,6 +211,8 @@ impl SessionManager {
 
         Self {
             state: Arc::new(Mutex::new(SessionState::default())),
+            visual_busy: Arc::new(AtomicBool::new(false)),
+            visual_result: Arc::new(Mutex::new(None)),
             db,
             grace_period_sec: settings.grace_period_sec,
             idle_timeout_sec: settings.idle_timeout_sec,
@@ -230,6 +263,7 @@ impl SessionManager {
         };
 
         *self.state.lock() = new_state.clone();
+        *self.visual_result.lock() = None;
         *self.last_interval_id.lock() = None;
         *self.last_status.lock() = String::new();
         *self.last_raw_status.lock() = String::new();
@@ -247,7 +281,17 @@ impl SessionManager {
     }
 
     pub fn stop(&self) -> SessionSummary {
-        let state = self.state.lock().clone();
+        let state = {
+            let mut state = self.state.lock();
+            if state.active {
+                if let Some(last) = *self.last_tick_at.lock() {
+                    account_final_gap(&mut state, (Utc::now() - last).num_seconds().max(0));
+                }
+            }
+            // Deactivate atomically before scoring so in-flight observations/ticks cannot
+            // change counters after the summary snapshot was taken.
+            std::mem::take(&mut *state)
+        };
         let now = Utc::now().to_rfc3339();
 
         // Close last interval
@@ -291,9 +335,6 @@ impl SessionManager {
             let _ = self.db.add_points(&entry);
         }
 
-        // Reset state
-        *self.state.lock() = SessionState::default();
-
         SessionSummary {
             session_id: state.session_id,
             goal: state.goal,
@@ -327,12 +368,12 @@ impl SessionManager {
     /// Called every 5 seconds during an active session.
     pub fn tick(&self) -> Option<TickResult> {
         // Extract goal, description and check active state without holding the lock during network operations
-        let (goal, description, _profile_id) = {
+        let (goal, description, session_id) = {
             let s = self.state.lock();
             if !s.active {
                 return None;
             }
-            (s.goal.clone(), s.description.clone(), s.profile_id.clone())
+            (s.goal.clone(), s.description.clone(), s.session_id.clone())
         };
 
         // Get current window
@@ -381,27 +422,58 @@ impl SessionManager {
                 Classification::OffTask => "off_task",
                 Classification::OnTask => "on_task",
                 Classification::Ambiguous => {
-                    let ollama_up = *self.ollama_available.lock();
-                    if ollama_up && !classifier::is_opaque_ai_assistant(&window) {
-                        used_llm = true;
-                        match llm::classify_ambiguous(&goal, &description, &app_name, &window.title) {
-                            Some(llm::LlmVerdict::OnTask) => "on_task",
-                            Some(llm::LlmVerdict::OffTask) => "off_task",
-                            None => evaluate_relevance_heuristic(&goal, &description, &app_name, &window.title),
-                        }
-                    } else {
-                        evaluate_relevance_heuristic(&goal, &description, &app_name, &window.title)
-                    }
+                    evaluate_relevance_heuristic(&goal, &description, &app_name, &window.title)
                 }
             }
         };
+
+        // Visual evidence checks even Tier 0 work apps, since an allowed app can show
+        // unrelated work. Explicit session approvals and our own UI remain intentional exceptions.
+        if !is_invigil_window && !is_utility && !is_session_allowed
+            && *self.ollama_available.lock()
+            && self.db.get_setting("ai_enabled").unwrap_or_default() == "true" {
+            if let Some(observation) = self.visual_result.lock().as_ref() {
+                if let Some(verdict) = matching_visual_verdict(observation, &session_id, &window.process_name, &window.title) {
+                    status = match verdict { llm::LlmVerdict::OnTask => "on_task", llm::LlmVerdict::OffTask => "off_task" };
+                }
+            }
+            // One bounded in-flight model request. Tick accounting and expiration never
+            // wait for inference, including cold vision loads and unsupported models.
+            if self.visual_busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                let context = monitor::foreground_context();
+                let image = monitor::capture_foreground();
+                let observed = monitor::get_active_window();
+                if observed.process_name == window.process_name && observed.title == window.title {
+                    used_llm = true;
+                    let busy = self.visual_busy.clone();
+                    let result = self.visual_result.clone();
+                    let process = window.process_name.clone();
+                    let title = window.title.clone();
+                    let session_id = session_id.clone();
+                    let app_name = app_name.clone();
+                    std::thread::spawn(move || {
+                        let verdict = llm::classify_observation(&goal, &description, &app_name, &title, &context, image.as_deref());
+                        *result.lock() = Some(VisualObservation { session_id, process, title, completed_at: Instant::now(), verdict });
+                        busy.store(false, Ordering::Release);
+                        // All screenshot, context and request buffers drop here.
+                    });
+                } else {
+                    self.visual_busy.store(false, Ordering::Release);
+                    // Bad evidence is discarded; the baseline tick still accounts for time.
+                }
+            }
+        }
 
         // System idle detection for inactivity (does not erase active app name)
         let idle_sec = monitor::get_idle_seconds();
         let idle_limit = self.idle_timeout_sec as u64;
         let is_currently_idle = idle_limit > 0 && idle_sec >= idle_limit;
 
-        // Compute actual wall-clock delta since last tick
+        // Validate identity while holding the state lock before touching tick accounting.
+        let mut state = self.state.lock();
+        if !state.active || state.session_id != session_id {
+            return None;
+        }
         let now_ts = Utc::now();
         let delta = {
             let mut last = self.last_tick_at.lock();
@@ -409,12 +481,6 @@ impl SessionManager {
             *last = Some(now_ts);
             d.max(1)
         };
-
-        // Re-acquire lock to update session state safely
-        let mut state = self.state.lock();
-        if !state.active {
-            return None;
-        }
 
         state.is_idle = is_currently_idle;
         state.elapsed_sec += delta;
@@ -818,6 +884,7 @@ fn evaluate_relevance_heuristic(goal: &str, description: &str, app_name: &str, w
         "solve", "study", "just", "need", "want", "make", "like", "using", "used",
         "try", "trying", "practice", "learn", "learning", "working", "getting",
         "problems", "problem", "questions", "question", "exercises", "exercise",
+        "claude", "gemini", "chatgpt", "copilot", "perplexity", "purposes",
     ];
     let goal_keywords: Vec<&str> = combined_target
         .split_whitespace()
@@ -842,5 +909,32 @@ fn evaluate_relevance_heuristic(goal: &str, description: &str, app_name: &str, w
         "on_task"
     } else {
         "off_task"
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::{evaluate_relevance_heuristic, account_final_gap, matching_visual_verdict, SessionState, VisualObservation};
+    #[test]
+    fn manual_end_accounts_for_time_between_ticks() {
+        let mut state = SessionState { active: true, current_status: "off_task".into(), elapsed_sec: 10, off_task_sec: 10, ..Default::default() };
+        account_final_gap(&mut state, 33);
+        assert_eq!((state.elapsed_sec, state.off_task_sec), (43, 43));
+    }
+    #[test]
+    fn background_verdict_never_crosses_session_or_foreground_identity() {
+        let result = VisualObservation { session_id: "one".into(), process: "Claude.exe".into(), title: "Exam review".into(), completed_at: std::time::Instant::now(), verdict: Some(crate::llm::LlmVerdict::OnTask) };
+        assert!(matching_visual_verdict(&result, "one", "Claude.exe", "Exam review").is_some());
+        assert!(matching_visual_verdict(&result, "two", "Claude.exe", "Exam review").is_none());
+        assert!(matching_visual_verdict(&result, "one", "Claude.exe", "App project").is_none());
+        assert!(matching_visual_verdict(&result, "one", "chrome.exe", "Exam review").is_none());
+    }
+    #[test]
+    fn naming_an_ai_tool_does_not_allow_unrelated_chats() {
+        assert_eq!(evaluate_relevance_heuristic("Paradigms", "I will be studying for my Paradigms exam using Gemini or Claude for studying purposes", "Claude", "Building a desktop app"), "off_task");
+    }
+    #[test]
+    fn a_subject_in_the_chat_title_still_matches() {
+        assert_eq!(evaluate_relevance_heuristic("Paradigms", "Reviewing Paradigms exam questions with Claude", "Claude", "Paradigms exam review"), "on_task");
     }
 }
